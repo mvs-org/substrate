@@ -505,6 +505,13 @@ impl<B, E, Block> Client<B, E, Block> where
 		let info = self.backend.blockchain().info().map_err(|e| error::Error::from_blockchain(Box::new(e)))?;
 		Ok(self.header(&BlockId::Hash(info.best_hash))?.expect("Best block header must always exist"))
 	}
+
+	/// Get the most recent block hash of the best (longest) chain
+	/// that contains block with the given `block_hash`.
+	pub fn best_chain_containing_block_hash(&self, block_hash: Block::Hash) -> error::Result<Option<Block::Hash>> {
+		// TODO [snd] add implementation
+		unimplemented!()
+	}
 }
 
 impl<B, E, Block> bft::BlockImport<Block> for Client<B, E, Block>
