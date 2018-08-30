@@ -52,7 +52,7 @@ pub struct Client<B, E, Block> where Block: BlockT {
 	execution_strategy: ExecutionStrategy,
 }
 
-/// A source of blockchain evenets.
+/// A source of blockchain events.
 pub trait BlockchainEvents<Block: BlockT> {
 	/// Get block import event stream.
 	fn import_notification_stream(&self) -> BlockchainEventStream<Block>;
