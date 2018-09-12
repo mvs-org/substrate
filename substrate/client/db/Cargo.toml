@@ -22,3 +22,5 @@ substrate-state-db = { path = "../../../substrate/state-db" }
 
 [dev-dependencies]
 kvdb-memorydb = { git = "https://github.com/paritytech/parity-common" }
+substrate-keyring = { path = "../../../substrate/keyring" }
+substrate-test-client = { path = "../../test-client" }
