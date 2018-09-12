@@ -36,7 +36,7 @@ use blockchain::{self, Info as ChainInfo, Backend as ChainBackend, HeaderBackend
 use call_executor::{CallExecutor, LocalCallExecutor};
 use executor::{RuntimeVersion, RuntimeInfo};
 use notifications::{StorageNotifications, StorageEventStream};
-use {error, in_mem, block_builder, runtime_io, bft, genesis};
+use {error, block_builder, runtime_io, bft, genesis};
 
 /// Type that implements `futures::Stream` of block import events.
 pub type BlockchainEventStream<Block> = mpsc::UnboundedReceiver<BlockImportNotification<Block>>;
