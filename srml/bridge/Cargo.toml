@@ -1,0 +1,6 @@
+[package]
+name = "edgeware_bridge"
+version = "0.1.0"
+authors = ["Drew Stone <drew@commonwealth.com>"]
+
+[dependencies]
