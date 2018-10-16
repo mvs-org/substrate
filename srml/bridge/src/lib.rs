@@ -68,9 +68,21 @@ decl_event!(
 );
 
 decl_storage! {
-    trait Store for Module<T: Trait> as Session {
+    trait Store for Module<T: Trait> as Bridge {
         /// The current set of validators.
         pub Validators get(validators) config(): Vec<T::AccountId>;
+        /// The stake of each validator
+        pub ValidatorStake get(validator) map T::AccountId => T::Balance;
+        /// The total stake of the current validator set at a given block.
+        pub TotalStake get(block_number): Option(T::Balance);
+        /// The (hashes of) the active proposals.
+        pub Proposals get(proposals): Vec<T::Hash>;
+        /// Actual proposal for a given hash, if it's current.
+        pub ProposalOf get(proposal_of): map T::Hash => Option< <T as Trait>::Proposal >;
+        /// Votes for a given proposal: (yes_voters, no_voters).
+        pub Voting get(voting): map T::Hash => Option<(ProposalIndex, Vec<T::AccountId>, Vec<T::AccountId>)>;
+        /// Proposals so far.
+        pub ProposalCount get(proposal_count): u32;
     }
 };
 
@@ -88,9 +100,11 @@ impl<T: Trait> Module<T> {
 
     /// Set the current set of validators.
     ///
-    /// Called by `session::set_validators()` only. This allows the bridge to know
+    /// Called by `staking::new_era()` only. This allows the bridge to know
     /// after each new session who is in the current set of validators.
-    pub fn set_validators(new: &[T::AccountId]) {
+    pub fn set_validators(new: &[T::AccountId], stake: &[T::Balance]) {
         <Validators<T>>::put(&new.to_vec());            // TODO: optimise.
+        // Iterate over validators and add stake in order
+        // TODO: Make efficient
     }
 };

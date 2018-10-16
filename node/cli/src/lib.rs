@@ -45,6 +45,8 @@ pub enum ChainSpec {
 	BbqBirch,
 	/// Whatever the current runtime is with the "global testnet" defaults.
 	StagingTestnet,
+	/// What the current runtime is, with Drew, Dillon, and Raymond as auths
+	CommonwealthTestnet,
 }
 
 /// Get a chain config from a spec setting.
@@ -53,6 +55,7 @@ impl ChainSpec {
 		Ok(match self {
 			ChainSpec::BbqBirch => service::chain_spec::bbq_birch_config()?,
 			ChainSpec::Development => service::chain_spec::development_config(),
+			ChainSpec::CommonwealthTestnet => service::chain_spec::commonwealth_testnet_config(),
 			ChainSpec::LocalTestnet => service::chain_spec::local_testnet_config(),
 			ChainSpec::StagingTestnet => service::chain_spec::staging_testnet_config(),
 		})
@@ -64,6 +67,7 @@ impl ChainSpec {
 			"local" => Some(ChainSpec::LocalTestnet),
 			"" | "bbq-birch" => Some(ChainSpec::BbqBirch),
 			"staging" => Some(ChainSpec::StagingTestnet),
+			"commonwealth" => Some(ChainSpec::CommonwealthTestnet),
 			_ => None,
 		}
 	}

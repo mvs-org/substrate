@@ -42,6 +42,8 @@ extern crate srml_consensus as consensus;
 extern crate srml_session as session;
 extern crate srml_system as system;
 
+// extern crate edgeware_bridge as bridge;
+
 #[cfg(test)]
 extern crate substrate_primitives;
 #[cfg(test)]
@@ -510,6 +512,14 @@ impl<T: Trait> Module<T> {
 			<CurrentNominatorsFor<T>>::insert(v, Self::nominators_for(v));
 		}
 		<session::Module<T>>::set_validators(vals);
+
+		// // Update the new validator set on the bridge as well with their
+		// // respective staking amounts so we can determine the bridge threshold.
+		// let amounts = &intentions.into_iter()
+		// 	.map(|(amt, _)| amt)
+		// 	.take(desired_validator_count)
+		// 	.collect::<Vec<_>>();
+		// <bridge::Module<T>>::set_validators(vals, amounts);
 
 		// Update the balances for slashing/rewarding according to the stakes.
 		<CurrentOfflineSlash<T>>::put(Self::offline_slash().times(stake_range.1));

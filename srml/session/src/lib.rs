@@ -41,8 +41,6 @@ extern crate srml_consensus as consensus;
 extern crate srml_system as system;
 extern crate srml_timestamp as timestamp;
 
-extern crate edgeware_bridge as bridge;
-
 use rstd::prelude::*;
 use primitives::traits::{As, Zero, One, OnFinalise, Convert};
 use runtime_support::{StorageValue, StorageMap};
