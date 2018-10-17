@@ -223,7 +223,6 @@ fn testnet_genesis(initial_authorities: Vec<AuthorityId>) -> GenesisConfig {
 
 pub fn commonwealth_testnet_config() -> ChainSpec<GenesisConfig> {
 	let boot_nodes = vec![
-		"/ip4/18.223.143.102/tcp/30333/p2p/QmTfDmbacpKwhDVtHJBYd1r2PYV4ZaCpBo3Pm9aUgRGKLm".to_owned(),
 	];
 	ChainSpec::from_genesis(
 		"Commonwealth Testnet",
