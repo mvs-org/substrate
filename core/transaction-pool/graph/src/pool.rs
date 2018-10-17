@@ -47,7 +47,7 @@ pub type ExtrinsicFor<A> = <<A as ChainApi>::Block as traits::Block>::Extrinsic;
 /// Block number type for the ChainApi
 pub type NumberFor<A> = traits::NumberFor<<A as ChainApi>::Block>;
 /// A type of transaction stored in the pool
-pub type TransactionFor<A> = Arc<base::Transaction<ExHash<A>, TxData<ExtrinsicFor<A>>>>;
+pub type TransactionFor<A> = Arc<base::Transaction<ExHash<A>, ExtrinsicFor<A>>>;
 
 /// Concrete extrinsic validation and query logic.
 pub trait ChainApi: Send + Sync {
@@ -71,22 +71,6 @@ pub trait ChainApi: Send + Sync {
 	fn hash(&self, uxt: &ExtrinsicFor<Self>) -> Self::Hash;
 }
 
-/// Maximum time the transaction will be kept in the pool.
-///
-/// Transactions that don't get included within the limit are removed from the pool.
-const POOL_TIME: time::Duration = time::Duration::from_secs(60 * 5);
-
-/// Additional transaction data
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TxData<Ex> {
-	/// Raw data stored by the user.
-	pub raw: Ex,
-	/// Transaction validity deadline.
-	/// TODO [ToDr] Should we use longevity instead?
-	#[serde(skip)]
-	pub valid_till: Option<time::Instant>,
-}
-
 /// Pool configuration options.
 #[derive(Debug, Clone, Default)]
 pub struct Options;
@@ -97,7 +81,7 @@ pub struct Pool<B: ChainApi> {
 	listener: RwLock<Listener<ExHash<B>, BlockHash<B>>>,
 	pool: RwLock<base::BasePool<
 		ExHash<B>,
-		TxData<ExtrinsicFor<B>>,
+		ExtrinsicFor<B>,
 	>>,
 	import_notification_sinks: Mutex<Vec<mpsc::UnboundedSender<()>>>,
 	rotator: PoolRotator<ExHash<B>>,
@@ -117,36 +101,35 @@ impl<B: ChainApi> Pool<B> {
 			.map(|xt| -> Result<_, B::Error> {
 				let hash = self.api.hash(&xt);
 				if self.rotator.is_banned(&hash) {
-					return Err(error::ErrorKind::TemporarilyBanned.into())?;
+					bail!(error::Error::from(error::ErrorKind::TemporarilyBanned))
 				}
 
 				match self.api.validate_transaction(at, &xt)? {
-					TransactionValidity::Valid(priority, requires, provides, longevity)=> {
+					TransactionValidity::Valid(priority, requires, provides, longevity) => {
 						Ok(base::Transaction {
-							data: TxData {
-								raw: xt,
-								valid_till: Some(time::Instant::now() + POOL_TIME),
-							},
+							data:  xt,
 							hash,
 							priority,
 							requires,
 							provides,
-							longevity,
+							valid_till: block_number.as_().saturating_add(longevity),
 						})
 					},
 					TransactionValidity::Invalid => {
 						bail!(error::Error::from(error::ErrorKind::InvalidTransaction))
 					},
 					TransactionValidity::Unknown => {
-						self.listener.write().rejected(&hash, false);
+						self.listener.write().invalid(&hash);
 						bail!(error::Error::from(error::ErrorKind::UnknownTransactionValidity))
 					},
 				}
 			})
 			.map(|tx| {
-				let imported = self.pool.write().import(block_number.as_(), tx?)?;
+				let imported = self.pool.write().import(tx?)?;
 
-				self.import_notification_sinks.lock().retain(|sink| sink.unbounded_send(()).is_ok());
+				if let base::Imported::Ready { .. } = imported {
+					self.import_notification_sinks.lock().retain(|sink| sink.unbounded_send(()).is_ok());
+				}
 
 				let mut listener = self.listener.write();
 				fire_events(&mut *listener, &imported);
@@ -162,16 +145,15 @@ impl<B: ChainApi> Pool<B> {
 
 	/// Import a single extrinsic and starts to watch their progress in the pool.
 	pub fn submit_and_watch(&self, at: &BlockId<B::Block>, xt: ExtrinsicFor<B>) -> Result<Watcher<ExHash<B>, BlockHash<B>>, B::Error> {
-		let xt = self.submit_one(at, xt)?;
-		Ok(self.listener.write().create_watcher(xt))
+		let hash = self.api.hash(&xt);
+		let watcher = self.listener.write().create_watcher(hash);
+		self.submit_one(at, xt)?;
+		Ok(watcher)
 	}
 
 	/// Prunes ready transactions that provide given list of tags.
 	pub fn prune_tags(&self, at: &BlockId<B::Block>, tags: impl IntoIterator<Item=Tag>) -> Result<(), B::Error> {
-		let block_number = self.api.block_id_to_number(at)?
-			.ok_or_else(|| error::ErrorKind::Msg(format!("Invalid block id: {:?}", at)).into())?;
-
-		let status = self.pool.write().prune_tags(block_number.as_(), tags);
+		let status = self.pool.write().prune_tags(tags);
 		{
 			let mut listener = self.listener.write();
 			for promoted in &status.promoted {
@@ -183,7 +165,7 @@ impl<B: ChainApi> Pool<B> {
 		}
 		// try to re-submit pruned transactions since some of them might be still valid.
 		let hashes = status.pruned.iter().map(|tx| tx.hash.clone()).collect::<Vec<_>>();
-		let results = self.submit_at(at, status.pruned.into_iter().map(|tx| tx.data.raw.clone()))?;
+		let results = self.submit_at(at, status.pruned.into_iter().map(|tx| tx.data.clone()))?;
 		// Fire mined event for transactions that became invalid.
 		let hashes = results.into_iter().enumerate().filter_map(|(idx, r)| match r.map_err(error::IntoPoolError::into_pool_error) {
 			Err(Ok(err)) => match err.kind() {
@@ -210,15 +192,29 @@ impl<B: ChainApi> Pool<B> {
 	/// Stale transactions are transaction beyond their longevity period.
 	/// Note this function does not remove transactions that are already included in the chain.
 	/// See `prune_tags` ifyou want this.
-	pub fn clear_stale(&self, _at: &BlockId<B::Block>) -> Result<(), B::Error> {
+	pub fn clear_stale(&self, at: &BlockId<B::Block>) -> Result<(), B::Error> {
+		let block_number = self.api.block_id_to_number(at)?
+				.ok_or_else(|| error::ErrorKind::Msg(format!("Invalid block id: {:?}", at)).into())?
+				.as_();
 		let now = time::Instant::now();
 		let to_remove = self.ready(|pending| pending
-			.filter(|tx| self.rotator.ban_if_stale(&now, &tx))
+			.filter(|tx| self.rotator.ban_if_stale(&now, block_number, &tx))
 			.map(|tx| tx.hash.clone())
 			.collect::<Vec<_>>()
 		);
+		let futures_to_remove: Vec<ExHash<B>> = {
+			let p = self.pool.read();
+			let mut hashes = Vec::new();
+			for tx in p.futures() {
+				if self.rotator.ban_if_stale(&now, block_number, &tx) {
+					hashes.push(tx.hash.clone());
+				}
+			}
+			hashes
+		};
 		// removing old transactions
 		self.remove_invalid(&to_remove);
+		self.remove_invalid(&futures_to_remove);
 		// clear banned transactions timeouts
 		self.rotator.clear_timeouts(&now);
 
@@ -283,7 +279,7 @@ impl<B: ChainApi> Pool<B> {
 	///
 	/// Be careful with large limit values, as querying the entire pool might be time consuming.
 	pub fn all(&self, limit: usize) -> Vec<ExtrinsicFor<B>> {
-		self.ready(|it| it.take(limit).map(|ex| ex.data.raw.clone()).collect())
+		self.ready(|it| it.take(limit).map(|ex| ex.data.clone()).collect())
 	}
 
 	/// Returns pool status.
@@ -308,7 +304,7 @@ fn fire_events<H, H2, Ex>(
 		base::Imported::Ready { ref promoted, ref failed, ref removed, ref hash } => {
 			listener.ready(hash, None);
 			for f in failed {
-				listener.rejected(f, true);
+				listener.invalid(f);
 			}
 			for r in removed {
 				listener.dropped(&r.hash, Some(hash));
@@ -325,9 +321,287 @@ fn fire_events<H, H2, Ex>(
 
 #[cfg(test)]
 mod tests {
+	use super::*;
+	use futures::Stream;
+	use test_runtime::{Block, Extrinsic, Transfer};
+
+	#[derive(Debug, Default)]
+	struct TestApi;
+
+	impl ChainApi for TestApi {
+		type Block = Block;
+		type Hash = u64;
+		type Error = error::Error;
+
+		/// Verify extrinsic at given block.
+		fn validate_transaction(&self, at: &BlockId<Self::Block>, uxt: &ExtrinsicFor<Self>) -> Result<TransactionValidity, Self::Error> {
+			let block_number = self.block_id_to_number(at)?.unwrap();
+			let nonce = uxt.transfer.nonce;
+
+			if nonce < block_number {
+				Ok(TransactionValidity::Invalid)
+			} else {
+				Ok(TransactionValidity::Valid(
+					4,
+					if nonce > block_number { vec![vec![nonce as u8 - 1]] } else { vec![] },
+					vec![vec![nonce as u8]],
+					3,
+				))
+			}
+		}
+
+		/// Returns a block number given the block id.
+		fn block_id_to_number(&self, at: &BlockId<Self::Block>) -> Result<Option<NumberFor<Self>>, Self::Error> {
+			Ok(match at {
+				BlockId::Number(num) => Some(*num),
+				BlockId::Hash(_) => None,
+			})
+		}
+
+		/// Returns a block hash given the block id.
+		fn block_id_to_hash(&self, at: &BlockId<Self::Block>) -> Result<Option<BlockHash<Self>>, Self::Error> {
+			Ok(match at {
+				BlockId::Number(num) => Some((*num).into()),
+				BlockId::Hash(_) => None,
+			})
+		}
+
+		/// Hash the extrinsic.
+		fn hash(&self, uxt: &ExtrinsicFor<Self>) -> Self::Hash {
+			(uxt.transfer.from.low_u64() << 5) + uxt.transfer.nonce
+		}
+	}
+
+	fn uxt(transfer: Transfer) -> Extrinsic {
+		Extrinsic {
+			transfer,
+			signature: Default::default(),
+		}
+	}
+
+	fn pool() -> Pool<TestApi> {
+		Pool::new(Default::default(), TestApi::default())
+	}
+
+
 	#[test]
-	#[ignore]
-	fn should_have_some_basic_tests() {
-		assert_eq!(true, false);
+	fn should_validate_and_import_transaction() {
+		// given
+		let pool = pool();
+
+		// when
+		let hash = pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+			from: 1.into(),
+			to: 2.into(),
+			amount: 5,
+			nonce: 0,
+		})).unwrap();
+
+		// then
+		assert_eq!(pool.ready(|pending| pending.map(|tx| tx.hash.clone()).collect::<Vec<_>>()), vec![hash]);
+	}
+
+	#[test]
+	fn should_reject_if_temporarily_banned() {
+		// given
+		let pool = pool();
+		let uxt = uxt(Transfer {
+			from: 1.into(),
+			to: 2.into(),
+			amount: 5,
+			nonce: 0,
+		});
+
+		// when
+		pool.rotator.ban(&time::Instant::now(), &[pool.hash_of(&uxt)]);
+		let res = pool.submit_one(&BlockId::Number(0), uxt);
+		assert_eq!(pool.status().ready, 0);
+		assert_eq!(pool.status().future, 0);
+
+		// then
+		assert_matches!(res.unwrap_err().kind(), error::ErrorKind::TemporarilyBanned);
+	}
+
+	#[test]
+	fn should_notify_about_pool_events() {
+		let stream = {
+			// given
+			let pool = pool();
+			let stream = pool.import_notification_stream();
+
+			// when
+			let _hash = pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 0,
+			})).unwrap();
+			let _hash = pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 1,
+			})).unwrap();
+			// future doesn't count
+			let _hash = pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 3,
+			})).unwrap();
+
+			assert_eq!(pool.status().ready, 2);
+			assert_eq!(pool.status().future, 1);
+			stream
+		};
+
+		// then
+		let mut it = stream.wait();
+		assert_eq!(it.next(), Some(Ok(())));
+		assert_eq!(it.next(), Some(Ok(())));
+		assert_eq!(it.next(), None);
+	}
+
+	#[test]
+	fn should_clear_stale_transactions() {
+		// given
+		let pool = pool();
+		let hash1 = pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+			from: 1.into(),
+			to: 2.into(),
+			amount: 5,
+			nonce: 0,
+		})).unwrap();
+		let hash2 = pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+			from: 1.into(),
+			to: 2.into(),
+			amount: 5,
+			nonce: 1,
+		})).unwrap();
+		let hash3 = pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+			from: 1.into(),
+			to: 2.into(),
+			amount: 5,
+			nonce: 3,
+		})).unwrap();
+
+		// when
+		pool.clear_stale(&BlockId::Number(5)).unwrap();
+
+		// then
+		assert_eq!(pool.all(3).len(), 0);
+		assert_eq!(pool.status().future, 0);
+		assert_eq!(pool.status().ready, 0);
+		// make sure they are temporarily banned as well
+		assert!(pool.rotator.is_banned(&hash1));
+		assert!(pool.rotator.is_banned(&hash2));
+		assert!(pool.rotator.is_banned(&hash3));
+	}
+
+	mod listener {
+		use super::*;
+
+		#[test]
+		fn should_trigger_ready_and_finalised() {
+			// given
+			let pool = pool();
+			let watcher = pool.submit_and_watch(&BlockId::Number(0), uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 0,
+			})).unwrap();
+			assert_eq!(pool.status().ready, 1);
+			assert_eq!(pool.status().future, 0);
+
+			// when
+			pool.prune_tags(&BlockId::Number(2), vec![vec![0u8]]).unwrap();
+			assert_eq!(pool.status().ready, 0);
+			assert_eq!(pool.status().future, 0);
+
+			// then
+			let mut stream = watcher.into_stream().wait();
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Ready)));
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Finalised(2.into()))));
+			assert_eq!(stream.next(), None);
+		}
+
+		#[test]
+		fn should_trigger_future_and_ready_after_promoted() {
+			// given
+			let pool = pool();
+			let watcher = pool.submit_and_watch(&BlockId::Number(0), uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 1,
+			})).unwrap();
+			assert_eq!(pool.status().ready, 0);
+			assert_eq!(pool.status().future, 1);
+
+			// when
+			pool.submit_one(&BlockId::Number(0), uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 0,
+			})).unwrap();
+			assert_eq!(pool.status().ready, 2);
+
+			// then
+			let mut stream = watcher.into_stream().wait();
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Future)));
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Ready)));
+		}
+
+		#[test]
+		fn should_trigger_invalid_and_ban() {
+			// given
+			let pool = pool();
+			let uxt = uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 0,
+			});
+			let watcher = pool.submit_and_watch(&BlockId::Number(0), uxt).unwrap();
+			assert_eq!(pool.status().ready, 1);
+
+			// when
+			pool.remove_invalid(&[*watcher.hash()]);
+
+
+			// then
+			let mut stream = watcher.into_stream().wait();
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Ready)));
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Invalid)));
+			assert_eq!(stream.next(), None);
+		}
+
+		#[test]
+		fn should_trigger_broadcasted() {
+			// given
+			let pool = pool();
+			let uxt = uxt(Transfer {
+				from: 1.into(),
+				to: 2.into(),
+				amount: 5,
+				nonce: 0,
+			});
+			let watcher = pool.submit_and_watch(&BlockId::Number(0), uxt).unwrap();
+			assert_eq!(pool.status().ready, 1);
+
+			// when
+			let mut map = HashMap::new();
+			let peers = vec!["a".into(), "b".into(), "c".into()];
+			map.insert(*watcher.hash(), peers.clone());
+			pool.on_broadcasted(map);
+
+
+			// then
+			let mut stream = watcher.into_stream().wait();
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Ready)));
+			assert_eq!(stream.next(), Some(Ok(::watcher::Status::Broadcast(peers))));
+		}
 	}
 }

@@ -23,7 +23,6 @@
 //! graph in the correct order taking into account priorities and dependencies.
 //!
 //! TODO [ToDr]
-//! - [ ] Longevity handling (remove obsolete transactions periodically)
 //! - [ ] Multi-threading (getting ready transactions should not block the pool)
 // end::description[]
 
@@ -37,6 +36,12 @@ extern crate sr_primitives;
 #[macro_use] extern crate error_chain;
 #[macro_use] extern crate log;
 #[macro_use] extern crate serde_derive;
+
+#[cfg(test)]
+extern crate substrate_test_runtime as test_runtime;
+#[cfg(test)]
+#[macro_use]
+extern crate assert_matches;
 
 mod future;
 mod listener;
