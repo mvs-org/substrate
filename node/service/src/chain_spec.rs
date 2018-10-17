@@ -231,6 +231,7 @@ pub fn commonwealth_testnet_config() -> ChainSpec<GenesisConfig> {
 		boot_nodes,
 		Some(COMMONWEALTH_TELEMETRY_URL.into()),
 		None,
+		None,
 	)
 }
 
