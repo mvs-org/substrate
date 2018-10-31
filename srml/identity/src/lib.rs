@@ -67,10 +67,11 @@ pub trait Trait: balances::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
 
-// Do we want to look into making these types more intricate?
-// External identity is something like "https://www.github.com/drewstone"
-// 
-pub type ExternalIdentity = str;
+
+// External identity should be a packed array of bytes representing the
+// organization and the identity - { org, identity }
+// Packed encoding - [length of "github" in bytes, "github" in bytes, "drewstone" in bytes]
+pub type ExternalIdentity = [u8];
 pub type SigHash = [u8; 32];
 
 /// An event in this module.
