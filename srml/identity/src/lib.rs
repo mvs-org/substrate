@@ -31,7 +31,7 @@ extern crate srml_support as runtime_support;
 extern crate sr_std as rstd;
 extern crate sr_io as runtime_io;
 extern crate parity_codec as codec;
-extern crate sr_primitives as primitives;
+extern crate substrate_primitives as primitives;
 extern crate srml_system as system;
 
 #[cfg(test)]
@@ -47,6 +47,8 @@ extern crate srml_balances as balances;
 use rstd::prelude::*;
 use runtime_support::{StorageValue, StorageMap, Parameter};
 use runtime_support::dispatch::Result;
+use primitives::{hashing, ed25519}
+
 
 /// An identity index.
 pub type IdentityIndex = u32;
@@ -72,7 +74,10 @@ pub trait Trait: balances::Trait {
 // organization and the identity - { org, identity }
 // Packed encoding - [length of "github" in bytes, "github" in bytes, "drewstone" in bytes]
 pub type ExternalIdentity = [u8];
-pub type SigHash = [u8; 32];
+
+// Linked proof should be a byte array (indicative of some website link)
+pub type LinkedIdentityProof = [u8];
+pub type SigHash = ed25519::Signature;
 
 /// An event in this module.
 decl_event!(
@@ -83,27 +88,47 @@ decl_event!(
 );
 
 decl_storage! {
-    trait Store for Module<T: Trait> as IdentityLinks {
+    trait Store for Module<T: Trait> as IdentityStorage {
         /// The number of identities that have been added.
         pub IdentityCount get(identity_count) build(|_| 0 as IdentityIndex) : IdentityIndex;
-        /// The identities.
-        pub Identities get(identities): Vec<(IdentityIndex, T::IdentityLink, T::AccountId)>;
+        /// The hashed identities.
+        pub Identities get(identities): Vec<(T::Hash)>;
         /// Actual identity for a given hash, if it's current.
-        pub IdentityOf get(identity_of): map T::Hash => Option< <T as Trait>::Proposal >;
+        pub IdentityOf get(identity_of): map T::Hash => Option<(IdentityIndex, Option<LinkedIdentityProof>)>;
         /// The number of linked identities that have been added.
-        pub LinkedIdentityCount get(linked_identity_count): build(|_| 0 as IdentityIndex)
+        pub LinkedIdentityCount get(linked_identity_count): build(|_| 0 as IdentityIndex) : IdentityIndex;
     }
 }
 
 
 decl_module! {
-    pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+    pub struct Module<T: Trait> for enum Call where origin: <T as system::Trait>::Origin {
         fn deposit_event() = default;
 
-        fn publish(origin, T::Origin, external_identity: ExternalIdentity, sig_hash: SigHash) -> Result {
-            let _sender = ensure_signed(origin)?;
-            <PublicIdentities<T>>::put()
+        fn link(origin: T::Origin, identity: ExternalIdentity, proof_link: [u8]) -> Result {
 
         }
+
+        fn publish(origin, T::Origin, identity: ExternalIdentity, sig: SigHash) -> Result {
+            let _sender = ensure_signed(origin)?;
+            let public = ed25519::Public(_sender.into());
+            let hashed_identity = T::Hashing::hash_of(&identity).into();
+
+            // Check the signature of the hash of the external identity
+            if ed25519::verify_strong(&sig, &hashed_identity[..], public) {
+                // check existence of identity
+                ensure!(!<IdentityOf<T>>::exists(hashed_identity), "duplicate identities are not allowed");
+
+                let index = Self::identity_count();
+                <Identities<T>>::mutate(|identities| identities.push(hashed_identity));
+                <IdentityOf<T>>::insert(hashed_identity, (index, None));
+                Self::deposit_event(RawEvent::Published(hashed_identity, index, _sender));
+            } else {
+                Err(format!("Bad signature on {:?}", hash))
+            }
+
+        }
+
+
     }
 }
