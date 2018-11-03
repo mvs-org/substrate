@@ -16,55 +16,41 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(test)]
+#[cfg(feature = "std")]
+extern crate serde;
+
+#[cfg(feature = "std")]
 #[macro_use]
 extern crate serde_derive;
 
 #[cfg(test)]
-#[macro_use]
-extern crate parity_codec_derive;
-
-#[cfg_attr(test, macro_use)]
-extern crate srml_support as runtime_support;
-
-#[cfg_attr(not(feature = "std"), macro_use)]
-extern crate sr_std as rstd;
-extern crate sr_io as runtime_io;
-extern crate parity_codec as codec;
-extern crate substrate_primitives as primitives;
-extern crate srml_system as system;
-
-#[cfg(test)]
-#[macro_use]
 extern crate hex_literal;
 
-#[cfg(test)]
-extern crate substrate_primitives;
+extern crate parity_codec as codec;
+#[macro_use] extern crate parity_codec_derive;
+extern crate substrate_primitives as primitives;
+#[cfg_attr(not(feature = "std"), macro_use)]
+extern crate sr_std as rstd;
+extern crate srml_support as runtime_support;
+extern crate sr_primitives as runtime_primitives;
+extern crate sr_io as runtime_io;
 
-#[cfg(test)]
+#[macro_use] extern crate srml_support;
 extern crate srml_balances as balances;
+extern crate srml_system as system;
 
 use rstd::prelude::*;
+use system::ensure_signed;
 use runtime_support::{StorageValue, StorageMap, Parameter};
 use runtime_support::dispatch::Result;
-use primitives::{hashing, ed25519}
-
+use primitives::ed25519;
 
 /// An identity index.
 pub type IdentityIndex = u32;
 
-/// Determinator for whether a given account is able to transfer balance.
-pub trait EnsureLinked<Hash> {
-    /// Returns `Ok` iff the Identity has a link.
-    /// Returns `Err(...)` with why not otherwise.
-    fn ensure_linked(message_hash: &Hash) -> Result;
-}
-
-pub trait Trait: balances::Trait {
+pub trait Trait: system::Trait {
     /// An identity type
     type Identity: Parameter + Default + Copy;
-    /// A function that returns true iff a given identity has linked its identity attestation proof.
-    type EnsureLinked: EnsureLinked<Hash>;
     /// The overarching event type.
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
@@ -82,8 +68,8 @@ pub type SigHash = ed25519::Signature;
 /// An event in this module.
 decl_event!(
     pub enum Event<T> where <T as system::Trait>::Hash, <T as system::Trait>::AccountId {
-        Published(Hash, IdentityIndex, AccountId)
-        Linked(Hash, IdentityIndex, AccountId)
+        Published(Hash, IdentityIndex, AccountId),
+        Linked(Hash, IdentityIndex, AccountId),
     }
 );
 
@@ -94,41 +80,85 @@ decl_storage! {
         /// The hashed identities.
         pub Identities get(identities): Vec<(T::Hash)>;
         /// Actual identity for a given hash, if it's current.
-        pub IdentityOf get(identity_of): map T::Hash => Option<(IdentityIndex, Option<LinkedIdentityProof>)>;
+        pub IdentityOf get(identity_of): map T::Hash => Option<(IdentityIndex, T::AccountId, Option<LinkedIdentityProof>)>;
         /// The number of linked identities that have been added.
-        pub LinkedIdentityCount get(linked_identity_count): build(|_| 0 as IdentityIndex) : IdentityIndex;
+        pub LinkedIdentityCount get(linked_identity_count): u32;
     }
 }
-
 
 decl_module! {
     pub struct Module<T: Trait> for enum Call where origin: <T as system::Trait>::Origin {
         fn deposit_event() = default;
 
         fn link(origin: T::Origin, identity: ExternalIdentity, proof_link: [u8]) -> Result {
+            let _sender = ensure_signed(origin)?;
+            let public = ed25519::Public(_sender.into());
+            let hashed_identity = T::Hashing::hash_of(&identity).into();
 
+            // Check if the identities match the sender
+            match <IdentityOf<T>>::get(hashed_identity) {
+
+                // TODO: Decide how we want to process proof updates
+                // currently this implements no check against updating
+                // proof links
+                Some((index, account, proof)) => {
+                    if (account.into() == _sender.into()) {
+                        if !proof.is_some() {
+                            <LinkedIdentityCount<T>>::mutate(|i| *i += 1);
+                        };
+
+                        <IdentityOf<T>>::insert(hashed_identity, (index, account, proof_link));
+                        Self::deposit_event(RawEvent::Linked(hashed_identity, index, account));
+                    } else {
+                        Err(format!("Origin {:?} doesn't match {:?}", _sender.into(), account.into()))    
+                    }
+                },
+                None => {
+                    Err(format!("No entry with hashed identity {:?}", hashed_identity))
+                },
+            };
+
+            Ok(())
         }
 
-        fn publish(origin, T::Origin, identity: ExternalIdentity, sig: SigHash) -> Result {
+        fn publish(origin: T::Origin, identity: ExternalIdentity, sig: SigHash) -> Result {
             let _sender = ensure_signed(origin)?;
             let public = ed25519::Public(_sender.into());
             let hashed_identity = T::Hashing::hash_of(&identity).into();
 
             // Check the signature of the hash of the external identity
             if ed25519::verify_strong(&sig, &hashed_identity[..], public) {
-                // check existence of identity
+                // Check existence of identity
                 ensure!(!<IdentityOf<T>>::exists(hashed_identity), "duplicate identities are not allowed");
 
                 let index = Self::identity_count();
                 <Identities<T>>::mutate(|identities| identities.push(hashed_identity));
-                <IdentityOf<T>>::insert(hashed_identity, (index, None));
-                Self::deposit_event(RawEvent::Published(hashed_identity, index, _sender));
+                <IdentityOf<T>>::insert(hashed_identity, (index, _sender, None));
+                Self::deposit_event(RawEvent::Published(hashed_identity, index, account));
             } else {
                 Err(format!("Bad signature on {:?}", hash))
             }
 
+            Ok(())
         }
+    }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::RawEvent;
+    use ::tests::*;
+    use ::tests::{Call, Origin, Event as OuterEvent};
+    use srml_support::Hashable;
+    use system::{EventRecord, Phase};
 
+    #[test]
+    fn identity_basic_environment_works() {
+        with_externalities(&mut new_test_ext(true), || {
+            System::set_block_number(1);
+            assert_eq!(Balances::free_balance(&42), 0);
+            assert_eq!(IdentityStorage::identities(), Vec::<H256>::new());
+        });
     }
 }
