@@ -42,6 +42,7 @@ extern crate sr_io as runtime_io;
 extern crate srml_balances as balances;
 extern crate srml_system as system;
 
+use primitives::H256;
 use runtime_primitives::traits::Hash;
 use rstd::prelude::*;
 use system::ensure_signed;
@@ -74,18 +75,6 @@ decl_event!(
         Linked(Hash, IdentityIndex, AccountId),
     }
 );
-
-impl Into<[u8; 32]> for <T as system::Trait>::AccountId {
-    fn into(self) -> [u8; 32] {
-        self.0
-    }
-}
-
-impl From<[u8; 32]> for <T as system::Trait>::AccountId {
-    fn from(a: [u8; 32]) -> Self {
-        T::AccountId(a)
-    }
-}
 
 decl_module! {
     pub struct Module<T: Trait> for enum Call where origin: T::Origin {
