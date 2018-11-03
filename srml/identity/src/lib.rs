@@ -19,6 +19,9 @@
 #[cfg(feature = "std")]
 extern crate serde;
 
+// Needed for deriving `Serialize` and `Deserialize` for various types.
+// We only implement the serde traits for std builds - they're unneeded
+// in the wasm runtime.
 #[cfg(feature = "std")]
 #[macro_use]
 extern crate serde_derive;
@@ -39,9 +42,10 @@ extern crate sr_io as runtime_io;
 extern crate srml_balances as balances;
 extern crate srml_system as system;
 
+use runtime_primitives::traits::Hash;
 use rstd::prelude::*;
 use system::ensure_signed;
-use runtime_support::{StorageValue, StorageMap, Parameter};
+use runtime_support::{StorageValue, StorageMap};
 use runtime_support::dispatch::Result;
 use primitives::ed25519;
 
@@ -49,8 +53,6 @@ use primitives::ed25519;
 pub type IdentityIndex = u32;
 
 pub trait Trait: system::Trait {
-    /// An identity type
-    type Identity: Parameter + Default + Copy;
     /// The overarching event type.
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
@@ -59,10 +61,10 @@ pub trait Trait: system::Trait {
 // External identity should be a packed array of bytes representing the
 // organization and the identity - { org, identity }
 // Packed encoding - [length of "github" in bytes, "github" in bytes, "drewstone" in bytes]
-pub type ExternalIdentity = [u8];
+pub type ExternalIdentity = Vec<u8>;
 
 // Linked proof should be a byte array (indicative of some website link)
-pub type LinkedIdentityProof = [u8];
+pub type LinkedIdentityProof = Vec<u8>;
 pub type SigHash = ed25519::Signature;
 
 /// An event in this module.
@@ -73,24 +75,23 @@ decl_event!(
     }
 );
 
-decl_storage! {
-    trait Store for Module<T: Trait> as IdentityStorage {
-        /// The number of identities that have been added.
-        pub IdentityCount get(identity_count) build(|_| 0 as IdentityIndex) : IdentityIndex;
-        /// The hashed identities.
-        pub Identities get(identities): Vec<(T::Hash)>;
-        /// Actual identity for a given hash, if it's current.
-        pub IdentityOf get(identity_of): map T::Hash => Option<(IdentityIndex, T::AccountId, Option<LinkedIdentityProof>)>;
-        /// The number of linked identities that have been added.
-        pub LinkedIdentityCount get(linked_identity_count): u32;
+impl Into<[u8; 32]> for <T as system::Trait>::AccountId {
+    fn into(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl From<[u8; 32]> for <T as system::Trait>::AccountId {
+    fn from(a: [u8; 32]) -> Self {
+        T::AccountId(a)
     }
 }
 
 decl_module! {
-    pub struct Module<T: Trait> for enum Call where origin: <T as system::Trait>::Origin {
+    pub struct Module<T: Trait> for enum Call where origin: T::Origin {
         fn deposit_event() = default;
 
-        fn link(origin: T::Origin, identity: ExternalIdentity, proof_link: [u8]) -> Result {
+        fn link(origin, identity: ExternalIdentity, proof_link: LinkedIdentityProof) -> Result {
             let _sender = ensure_signed(origin)?;
             let public = ed25519::Public(_sender.into());
             let hashed_identity = T::Hashing::hash_of(&identity).into();
@@ -102,7 +103,7 @@ decl_module! {
                 // currently this implements no check against updating
                 // proof links
                 Some((index, account, proof)) => {
-                    if (account.into() == _sender.into()) {
+                    if account.into() == _sender.into() {
                         if !proof.is_some() {
                             <LinkedIdentityCount<T>>::mutate(|i| *i += 1);
                         };
@@ -110,18 +111,18 @@ decl_module! {
                         <IdentityOf<T>>::insert(hashed_identity, (index, account, proof_link));
                         Self::deposit_event(RawEvent::Linked(hashed_identity, index, account));
                     } else {
-                        Err(format!("Origin {:?} doesn't match {:?}", _sender.into(), account.into()))    
+                        Err(format!("Origin {:?} doesn't match {:?}", _sender.into(), account.into()));   
                     }
                 },
                 None => {
-                    Err(format!("No entry with hashed identity {:?}", hashed_identity))
+                    Err(format!("No entry with hashed identity {:?}", hashed_identity));
                 },
             };
 
             Ok(())
         }
 
-        fn publish(origin: T::Origin, identity: ExternalIdentity, sig: SigHash) -> Result {
+        fn publish(origin, identity: ExternalIdentity, sig: SigHash) -> Result {
             let _sender = ensure_signed(origin)?;
             let public = ed25519::Public(_sender.into());
             let hashed_identity = T::Hashing::hash_of(&identity).into();
@@ -134,9 +135,9 @@ decl_module! {
                 let index = Self::identity_count();
                 <Identities<T>>::mutate(|identities| identities.push(hashed_identity));
                 <IdentityOf<T>>::insert(hashed_identity, (index, _sender, None));
-                Self::deposit_event(RawEvent::Published(hashed_identity, index, account));
+                Self::deposit_event(RawEvent::Published(hashed_identity, index, _sender.into()));
             } else {
-                Err(format!("Bad signature on {:?}", hash))
+                Err(format!("Bad signature on {:?}", hashed_identity));
             }
 
             Ok(())
@@ -144,21 +145,15 @@ decl_module! {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use super::RawEvent;
-    use ::tests::*;
-    use ::tests::{Call, Origin, Event as OuterEvent};
-    use srml_support::Hashable;
-    use system::{EventRecord, Phase};
-
-    #[test]
-    fn identity_basic_environment_works() {
-        with_externalities(&mut new_test_ext(true), || {
-            System::set_block_number(1);
-            assert_eq!(Balances::free_balance(&42), 0);
-            assert_eq!(IdentityStorage::identities(), Vec::<H256>::new());
-        });
+decl_storage! {
+    trait Store for Module<T: Trait> as IdentityStorage {
+        /// The number of identities that have been added.
+        pub IdentityCount get(identity_count) build(|_| 0 as IdentityIndex) : IdentityIndex;
+        /// The hashed identities.
+        pub Identities get(identities): Vec<(T::Hash)>;
+        /// Actual identity for a given hash, if it's current.
+        pub IdentityOf get(identity_of): map T::Hash => Option<(IdentityIndex, T::AccountId, Option<LinkedIdentityProof>)>;
+        /// The number of linked identities that have been added.
+        pub LinkedIdentityCount get(linked_identity_count): u32;
     }
 }

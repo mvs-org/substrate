@@ -25,7 +25,6 @@ std = [
     "serde/std",
     "serde_derive",
     "safe-mix/std",
-    "substrate-keyring",
     "parity-codec/std",
     "parity-codec-derive/std",
     "substrate-primitives/std",
