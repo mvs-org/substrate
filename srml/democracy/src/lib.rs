@@ -156,6 +156,34 @@ decl_module! {
 			Ok(())
 		}
 
+		pub fn delegate(origin, to: T::AccountId, maximum_periods: u32) -> Result {
+			let _sender = ensure_signed(origin)?;
+			// Check that no delegation cycle exists and that the depth is valid
+			ensure!(!Self::is_invalid_delegation(&_sender, to.clone()), "invalid delegation");
+			// Update the delegate of _sender -> Some(to)
+			<Delegations<T>>::insert(&_sender, (to.clone(), maximum_periods));
+			// Fire delegation event
+			Self::deposit_event(RawEvent::Delegated(_sender, to, maximum_periods));
+			Ok(())
+		}
+
+		pub fn undelegate(origin) -> Result {
+			let _sender = ensure_signed(origin)?;
+			// Update the delegate to the sender, None type throws an error due to missing Trait bound
+			<Delegations<T>>::remove(&_sender);
+			// Fire delegation event
+			Self::deposit_event(RawEvent::Undelegated(_sender));
+			Ok(())
+		}
+
+		pub fn assertVotes(origin) -> Result {
+			Ok(())
+		}
+
+		pub fn challengeVotes(origin) -> Result {
+			Ok(())
+		}
+
 		fn on_finalise(n: T::BlockNumber) {
 			if let Err(e) = Self::end_block(n) {
 				runtime_io::print(e);
@@ -225,6 +253,8 @@ decl_storage! {
 		/// voter when called with the referendum (you'll get the default `Vote` value otherwise). If you don't want to check
 		/// `voters_for`, then you can also check for simple existence with `VoteOf::exists` first.
 		pub VoteOf get(vote_of): map (ReferendumIndex, T::AccountId) => Vote;
+		/// The mapping of active delegations
+		pub Delegations get(delegations): map T::AccountId => Option<(T::AccountId, u32)>;
 	}
 }
 
@@ -237,6 +267,8 @@ decl_event!(
 		NotPassed(ReferendumIndex),
 		Cancelled(ReferendumIndex),
 		Executed(ReferendumIndex, bool),
+		Delegated(AccountId, AccountId, u32),
+		Undelegated(AccountId),
 	}
 );
 
@@ -412,6 +444,17 @@ impl<T: Trait> Module<T> {
 			Self::enact_proposal(proposal, index);
 		}
 		Ok(())
+	}
+
+	fn is_invalid_delegation(from: &T::AccountId, to: T::AccountId) -> bool {
+		// Loop over delegation path of "to" to check if "from" exists
+		if from == &to {
+			return true;
+		}
+		match Self::delegations(&to) {
+			Some((delegate, _)) => Self::is_invalid_delegation(from, delegate),
+			None => false,
+		}
 	}
 }
 
