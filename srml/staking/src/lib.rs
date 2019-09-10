@@ -1179,13 +1179,14 @@ impl<T: Trait> Module<T> {
 				// Era of duration more than u32::MAX is rewarded as u32::MAX.
 				<BalanceOf<T>>::from(era_duration.saturated_into::<u32>()),
 			);
-
+			println!("Total Payout {:?}", total_payout);
 			let mut total_imbalance = <PositiveImbalanceOf<T>>::zero();
 
 			let total_points = rewards.total;
 			for (v, points) in validators.iter().zip(rewards.rewards.into_iter()) {
 				if points != 0 {
 					let reward = multiply_by_rational(total_payout, points, total_points);
+					println!("Validator {:?}, Reward {:?}", v, reward);
 					total_imbalance.subsume(Self::reward_validator(v, reward));
 				}
 			}
