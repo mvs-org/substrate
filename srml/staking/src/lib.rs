@@ -1172,16 +1172,16 @@ impl<T: Trait> Module<T> {
 
 			let validator_len: BalanceOf<T> = (validators.len() as u32).into();
 			let total_rewarded_stake = Self::slot_stake() * validator_len;
-			println!("Total rewarded stake {:?}", total_rewarded_stake);
-			println!("Total issuance {:?}", T::Currency::total_issuance());
-			println!("Era length as balance {:?}", <BalanceOf<T>>::from(era_duration.saturated_into::<u32>()));
+			// println!("Total rewarded stake {:?}", total_rewarded_stake);
+			// println!("Total issuance {:?}", T::Currency::total_issuance());
+			// println!("Era length as balance {:?}", <BalanceOf<T>>::from(era_duration.saturated_into::<u32>()));
 			let total_payout = inflation::compute_total_payout(
 				total_rewarded_stake.clone(),
 				T::Currency::total_issuance(),
 				// Era of duration more than u32::MAX is rewarded as u32::MAX.
 				<BalanceOf<T>>::from(era_duration.saturated_into::<u32>()),
 			);
-			println!("Total Payout {:?}", total_payout);
+			// println!("Total Payout {:?}", total_payout);
 			let mut total_imbalance = <PositiveImbalanceOf<T>>::zero();
 
 			let total_points = rewards.total;
