@@ -92,7 +92,7 @@ struct PiecewiseLinear {
 	/// * the n-th segment starts at the abscissa of the n-th element until the abscissa of the
 	///     n-th + 1 element, and is defined by the linear function of the n-th element
 	/// * last segment doesn't end
-	pieces: [(u32, Linear); 20],
+	pieces: [(u32, Linear); 12],
 }
 
 impl PiecewiseLinear {
@@ -158,28 +158,45 @@ impl PiecewiseLinear {
 ///
 /// This approximation is tested to be close to real one by an error less than 1% see
 /// `i_npos_precision` test.
+
+///
+
+// pieces: [
+// 		(0, Linear { negative_a: false, a: 125000000, b: 25000000 }),
+// 		(800000000, Linear { negative_a: true, a: 967418813, b: 873935050 }),
+// 		(810526320, Linear { negative_a: true, a: 836065060, b: 767469376 }),
+// 		(821052630, Linear { negative_a: true, a: 722545011, b: 674263442 }),
+// 		(831578950, Linear { negative_a: true, a: 624440093, b: 592681457 }),
+// 		(842105260, Linear { negative_a: true, a: 539653934, b: 521282587 }),
+// 		(852631580, Linear { negative_a: true, a: 466380907, b: 458807689 }),
+// 		(863157890, Linear { negative_a: true, a: 403057289, b: 404149409 }),
+// 		(873684210, Linear { negative_a: true, a: 348329711, b: 356334788 }),
+// 		(884210530, Linear { negative_a: true, a: 301035216, b: 314516498 }),
+// 		(894736840, Linear { negative_a: true, a: 260161196, b: 277945006 }),
+// 		(905263160, Linear { negative_a: true, a: 224836624, b: 245966972 }),
+// 		(915789470, Linear { negative_a: true, a: 194309122, b: 218010208 }),
+// 		(926315790, Linear { negative_a: true, a: 167925733, b: 193570858 }),
+// 		(936842110, Linear { negative_a: true, a: 145124930, b: 172210106 }),
+// 		(947368420, Linear { negative_a: true, a: 125420850, b: 153543082 }),
+// 		(957894740, Linear { negative_a: true, a: 108391260, b: 137230527 }),
+// 		(968421050, Linear { negative_a: true, a: 093673763, b: 122977794 }),
+// 		(978947370, Linear { negative_a: true, a: 080955245, b: 110527034 }),
+// 		(989473680, Linear { negative_a: true, a: 080955246, b: 110527034 })
+// 	]
 const I_NPOS: PiecewiseLinear = PiecewiseLinear {
-	pieces: [
-		(0, Linear { negative_a: false, a: 125000000, b: 25000000 }),
-		(800000000, Linear { negative_a: true, a: 967418813, b: 8739350504 }),
-		(507648979, Linear { negative_a: true, a: 8360650598, b: 7674693762 }),
-		(515726279, Linear { negative_a: true, a: 722545011, b: 6742634416 }),
-		(524282719, Linear { negative_a: true, a: 6244400934, b: 5926814572 }),
-		(533378749, Linear { negative_a: true, a:  5396539341, b: 5212825865 }),
-		(543087019, Linear { negative_a: true, a:  4663809065, b: 4588076892 }),
-		(553495919, Linear { negative_a: true, a:  4030572888, b: 4041494089 }),
-		(564714479, Linear { negative_a: true, a:  3483297107, b: 3563347881 }),
-		(576879339, Linear { negative_a: true, a:  3010352156, b: 3145164975 }),
-		(590164929, Linear { negative_a: true, a:  2601611959, b: 2779450063 }),
-		(604798839, Linear { negative_a: true, a:  2248366237, b: 2459669724 }),
-		(621085859, Linear { negative_a: true, a:  1943091223, b: 2180102081 }),
-		(639447429, Linear { negative_a: true, a:  1679257328, b: 1935708579 }),
-		(660489879, Linear { negative_a: true, a:  1451249298, b: 1722101055 }),
-		(685131379, Linear { negative_a: true, a:  1254208498, b: 1535430823 }),
-		(714860569, Linear { negative_a: true, a:  1083912596, b: 1372305274 }),
-		(752334749, Linear { negative_a: true, a:  0936737625, b: 1229777935 }),
-		(803047659, Linear { negative_a: true, a:  0809552445 , b: 1105270337 }),
-		(881691659, Linear { negative_a: true, a:  0809552446, b: 1105270338 })
+		pieces: [
+		(0, Linear { negative_a: false, a: 93750000, b: 25000000 }), 
+		(800000000, Linear { negative_a: true, a: 986493987, b: 889195189 }), 
+		(807648980, Linear { negative_a: true, a: 884661327, b: 806950146 }), 
+		(815726279, Linear { negative_a: true, a: 788373842, b: 728405913 }), 
+		(824282719, Linear { negative_a: true, a: 697631517, b: 653608583 }), 
+		(833378749, Linear { negative_a: true, a: 612434341, b: 582607067 }), 
+		(843087019, Linear { negative_a: true, a: 532782338, b: 515453497 }), 
+		(853495919, Linear { negative_a: true, a: 458675508, b: 452203620 }), 
+		(864714479, Linear { negative_a: true, a: 390113843, b: 392917356 }), 
+		(876879339, Linear { negative_a: true, a: 327097341, b: 337659487 }), 
+		(890164929, Linear { negative_a: true, a: 269626004, b: 286500519 }), 
+		(904798839, Linear { negative_a: true, a: 135037458, b: 164724958 })
 	]
 };
 
@@ -359,7 +376,7 @@ mod test_inflation {
 			.collect();
 
 		println!("Generated pieces: {:?}", pieces);
-		assert_eq!(pieces.len(), 20);
+		assert_eq!(pieces.len(), 12);
 
 		super::PiecewiseLinear { pieces: (&pieces[..]).try_into().unwrap() }
 	}
@@ -375,7 +392,7 @@ mod test_inflation {
 	#[test]
 	fn i_npos_precision() {
 		const STEP_PRECISION: f64 = 0.000_001;
-		const ERROR: f64 = 0.000_2;
+		const ERROR: f64 = 0.000_4;
 
 		macro_rules! test_for_value {
 			($($total_token:expr => $type:ty,)*) => {
