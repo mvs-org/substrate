@@ -120,28 +120,66 @@ impl PiecewiseLinear {
 ///
 /// This approximation is tested to be close to real one by an error less than 1% see
 /// `i_npos_precision` test.
+
+/// Polkadot 
+// const I_NPOS: PiecewiseLinear = PiecewiseLinear {
+// 	pieces: [
+// 		(0, Linear { negative_a: false, a: 150000000, b: 25000000 }),
+// 		(500000000, Linear { negative_a: true, a: 986493987, b: 593246993 }),
+// 		(507648979, Linear { negative_a: true, a: 884661327, b: 541551747 }),
+// 		(515726279, Linear { negative_a: true, a: 788373842, b: 491893761 }),
+// 		(524282719, Linear { negative_a: true, a: 697631517, b: 444319128 }),
+// 		(533378749, Linear { negative_a: true, a: 612434341, b: 398876765 }),
+// 		(543087019, Linear { negative_a: true, a: 532782338, b: 355618796 }),
+// 		(553495919, Linear { negative_a: true, a: 458675508, b: 314600968 }),
+// 		(564714479, Linear { negative_a: true, a: 390113843, b: 275883203 }),
+// 		(576879339, Linear { negative_a: true, a: 327097341, b: 239530285 }),
+// 		(590164929, Linear { negative_a: true, a: 269626004, b: 205612717 }),
+// 		(604798839, Linear { negative_a: true, a: 217699848, b: 174207838 }),
+// 		(621085859, Linear { negative_a: true, a: 171318873, b: 145401271 }),
+// 		(639447429, Linear { negative_a: true, a: 130483080, b: 119288928 }),
+// 		(660489879, Linear { negative_a: true, a: 95192479, b: 95979842 }),
+// 		(685131379, Linear { negative_a: true, a: 65447076, b: 75600334 }),
+// 		(714860569, Linear { negative_a: true, a: 41246910, b: 58300589 }),
+// 		(752334749, Linear { negative_a: true, a: 22592084, b: 44265915 }),
+// 		(803047659, Linear { negative_a: true, a: 9482996, b: 33738693 }),
+// 		(881691659, Linear { negative_a: true, a: 2572702, b: 27645944 })
+// 	]
+// };
+
+///
+/// Piecewise linear approximation of `I_NPoS` for Edgeware. The inflation rate.
+///
+/// Using the constants:
+/// * `I_0` = 0.025;
+/// * `i_ideal` = 0.125;
+/// * `x_ideal` = 0.8;
+/// * `d` = 0.05;
+///
+/// This approximation is tested to be close to real one by an error less than 1% see
+/// `i_npos_precision` test.
 const I_NPOS: PiecewiseLinear = PiecewiseLinear {
 	pieces: [
-		(0, Linear { negative_a: false, a: 150000000, b: 25000000 }),
-		(500000000, Linear { negative_a: true, a: 986493987, b: 593246993 }),
-		(507648979, Linear { negative_a: true, a: 884661327, b: 541551747 }),
-		(515726279, Linear { negative_a: true, a: 788373842, b: 491893761 }),
-		(524282719, Linear { negative_a: true, a: 697631517, b: 444319128 }),
-		(533378749, Linear { negative_a: true, a: 612434341, b: 398876765 }),
-		(543087019, Linear { negative_a: true, a: 532782338, b: 355618796 }),
-		(553495919, Linear { negative_a: true, a: 458675508, b: 314600968 }),
-		(564714479, Linear { negative_a: true, a: 390113843, b: 275883203 }),
-		(576879339, Linear { negative_a: true, a: 327097341, b: 239530285 }),
-		(590164929, Linear { negative_a: true, a: 269626004, b: 205612717 }),
-		(604798839, Linear { negative_a: true, a: 217699848, b: 174207838 }),
-		(621085859, Linear { negative_a: true, a: 171318873, b: 145401271 }),
-		(639447429, Linear { negative_a: true, a: 130483080, b: 119288928 }),
-		(660489879, Linear { negative_a: true, a: 95192479, b: 95979842 }),
-		(685131379, Linear { negative_a: true, a: 65447076, b: 75600334 }),
-		(714860569, Linear { negative_a: true, a: 41246910, b: 58300589 }),
-		(752334749, Linear { negative_a: true, a: 22592084, b: 44265915 }),
-		(803047659, Linear { negative_a: true, a: 9482996, b: 33738693 }),
-		(881691659, Linear { negative_a: true, a: 2572702, b: 27645944 })
+		(0, Linear { negative_a: false, a: 125000000, b: 25000000 }),
+		(800000000, Linear { negative_a: true, a: 967418813, b: 8739350504 }),
+		(507648979, Linear { negative_a: true, a: 8360650598, b: 7674693762 }),
+		(515726279, Linear { negative_a: true, a: 722545011, b: 6742634416 }),
+		(524282719, Linear { negative_a: true, a: 6244400934, b: 5926814572 }),
+		(533378749, Linear { negative_a: true, a:  5396539341, b: 5212825865 }),
+		(543087019, Linear { negative_a: true, a:  4663809065, b: 4588076892 }),
+		(553495919, Linear { negative_a: true, a:  4030572888, b: 4041494089 }),
+		(564714479, Linear { negative_a: true, a:  3483297107, b: 3563347881 }),
+		(576879339, Linear { negative_a: true, a:  3010352156, b: 3145164975 }),
+		(590164929, Linear { negative_a: true, a:  2601611959, b: 2779450063 }),
+		(604798839, Linear { negative_a: true, a:  2248366237, b: 2459669724 }),
+		(621085859, Linear { negative_a: true, a:  1943091223, b: 2180102081 }),
+		(639447429, Linear { negative_a: true, a:  1679257328, b: 1935708579 }),
+		(660489879, Linear { negative_a: true, a:  1451249298, b: 1722101055 }),
+		(685131379, Linear { negative_a: true, a:  1254208498, b: 1535430823 }),
+		(714860569, Linear { negative_a: true, a:  1083912596, b: 1372305274 }),
+		(752334749, Linear { negative_a: true, a:  0936737625, b: 1229777935 }),
+		(803047659, Linear { negative_a: true, a:  0809552445 , b: 1105270337 }),
+		(881691659, Linear { negative_a: true, a:  0809552446, b: 1105270338 })
 	]
 };
 
@@ -198,8 +236,8 @@ mod test_inflation {
 
 	// Constants defined in paper
 	const I_0: f64 = 0.025;
-	const i_ideal: f64 = 0.2;
-	const x_ideal: f64 = 0.5;
+	const i_ideal: f64 = 0.125;
+	const x_ideal: f64 = 0.8;
 	const d: f64 = 0.05;
 
 	// Left part from `x_ideal`
