@@ -472,9 +472,10 @@ impl<FullIdentification: Clone> Offence<FullIdentification> for GrandpaEquivocat
 		offenders_count: u32,
 		validator_set_count: u32,
 	) -> Perbill {
-		// the formula is min((3k / n)^2, 1)
-		let x = Perbill::from_rational_approximation(3 * offenders_count, validator_set_count);
-		// _ ^ 2
-		x.square()
+		// // the formula is min((3k / n)^2, 1)
+		// let x = Perbill::from_rational_approximation(3 * offenders_count, validator_set_count);
+		// // _ ^ 2
+		// x.square()
+		Perbill::from_parts(0 as u32)
 	}
 }
