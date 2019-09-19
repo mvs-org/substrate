@@ -38,6 +38,11 @@ const STAGING_TELEMETRY_URL: &str = "wss://telemetry.polkadot.io/submit/";
 /// Specialized `ChainSpec`.
 pub type ChainSpec = substrate_service::ChainSpec<GenesisConfig>;
 
+/// Testing net CW
+pub fn testing_for_cw() -> Result<ChainSpec, String> {
+	ChainSpec::from_json_bytes(&include_bytes!("../../../testnets/genesis.json")[..])
+}
+
 /// Flaming Fir testnet generator
 pub fn flaming_fir_config() -> Result<ChainSpec, String> {
 	ChainSpec::from_json_bytes(&include_bytes!("../res/flaming-fir.json")[..])

@@ -47,6 +47,8 @@ pub enum ChainSpec {
 	FlamingFir,
 	/// Whatever the current runtime is with the "global testnet" defaults.
 	StagingTestnet,
+	/// CW Testing
+	CommonwealthTesting,
 }
 
 /// Custom subcommands.
@@ -131,6 +133,7 @@ impl ChainSpec {
 			ChainSpec::Development => chain_spec::development_config(),
 			ChainSpec::LocalTestnet => chain_spec::local_testnet_config(),
 			ChainSpec::StagingTestnet => chain_spec::staging_testnet_config(),
+			ChainSpec::CommonwealthTesting => chain_spec::testing_for_cw()?,
 		})
 	}
 
@@ -140,6 +143,7 @@ impl ChainSpec {
 			"local" => Some(ChainSpec::LocalTestnet),
 			"" | "fir" | "flaming-fir" => Some(ChainSpec::FlamingFir),
 			"staging" => Some(ChainSpec::StagingTestnet),
+			"cw" => Some(ChainSpec::CommonwealthTesting),
 			_ => None,
 		}
 	}
