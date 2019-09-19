@@ -92,7 +92,7 @@ struct PiecewiseLinear {
 	/// * the n-th segment starts at the abscissa of the n-th element until the abscissa of the
 	///     n-th + 1 element, and is defined by the linear function of the n-th element
 	/// * last segment doesn't end
-	pieces: [(u32, Linear); 20],
+	pieces: [(u32, Linear); 11],
 }
 
 impl PiecewiseLinear {
@@ -113,34 +113,25 @@ impl PiecewiseLinear {
 ///
 /// Using the constants:
 /// * `I_0` = 0.025;
-/// * `i_ideal` = 0.2;
-/// * `x_ideal` = 0.5;
+/// * `i_ideal` = 0.1;
+/// * `x_ideal` = 0.8;
 /// * `d` = 0.05;
 ///
 /// This approximation is tested to be close to real one by an error less than 1% see
 /// `i_npos_precision` test.
 const I_NPOS: PiecewiseLinear = PiecewiseLinear {
 	pieces: [
-		(0, Linear { negative_a: false, a: 150000000, b: 25000000 }),
-		(500000000, Linear { negative_a: true, a: 986493987, b: 593246993 }),
-		(507648979, Linear { negative_a: true, a: 884661327, b: 541551747 }),
-		(515726279, Linear { negative_a: true, a: 788373842, b: 491893761 }),
-		(524282719, Linear { negative_a: true, a: 697631517, b: 444319128 }),
-		(533378749, Linear { negative_a: true, a: 612434341, b: 398876765 }),
-		(543087019, Linear { negative_a: true, a: 532782338, b: 355618796 }),
-		(553495919, Linear { negative_a: true, a: 458675508, b: 314600968 }),
-		(564714479, Linear { negative_a: true, a: 390113843, b: 275883203 }),
-		(576879339, Linear { negative_a: true, a: 327097341, b: 239530285 }),
-		(590164929, Linear { negative_a: true, a: 269626004, b: 205612717 }),
-		(604798839, Linear { negative_a: true, a: 217699848, b: 174207838 }),
-		(621085859, Linear { negative_a: true, a: 171318873, b: 145401271 }),
-		(639447429, Linear { negative_a: true, a: 130483080, b: 119288928 }),
-		(660489879, Linear { negative_a: true, a: 95192479, b: 95979842 }),
-		(685131379, Linear { negative_a: true, a: 65447076, b: 75600334 }),
-		(714860569, Linear { negative_a: true, a: 41246910, b: 58300589 }),
-		(752334749, Linear { negative_a: true, a: 22592084, b: 44265915 }),
-		(803047659, Linear { negative_a: true, a: 9482996, b: 33738693 }),
-		(881691659, Linear { negative_a: true, a: 2572702, b: 27645944 })
+		(0, Linear { negative_a: false, a: 68750000, b: 25000000 }),
+		(800000000, Linear { negative_a: true, a: 716948202, b: 653558561 }),
+		(808972629, Linear { negative_a: true, a: 630541723, b: 583658085 }),
+		(818540449, Linear { negative_a: true, a: 549680425, b: 517469842 }),
+		(828788059, Linear { negative_a: true, a: 474364292, b: 455048730 }),
+		(839819479, Linear { negative_a: true, a: 404593303, b: 396453694 }),
+		(851764599, Linear { negative_a: true, a: 340367471, b: 341748404 }),
+		(864788509, Linear { negative_a: true, a: 281686818, b: 291002050 }),
+		(879105529, Linear { negative_a: true, a: 228551351, b: 244290367 }),
+		(895000929, Linear { negative_a: true, a: 180961065, b: 201697017 }),
+		(912866189, Linear { negative_a: true, a: 92573464, b: 121010964 })
 	]
 };
 
@@ -200,6 +191,12 @@ mod test_inflation {
 	const i_ideal: f64 = 0.2;
 	const x_ideal: f64 = 0.5;
 	const d: f64 = 0.05;
+
+	/// Used in Edgeware
+	/// const I_0: f64 = 0.025;
+	/// const i_ideal: f64 = 0.10;
+	/// const x_ideal: f64 = 0.80;
+	/// const d: f64 = 0.05;
 
 	// Left part from `x_ideal`
 	fn I_left(x: f64) -> f64 {
