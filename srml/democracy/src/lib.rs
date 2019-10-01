@@ -26,7 +26,7 @@ use sr_primitives::{
 };
 use codec::{Encode, Decode, Input, Output, Error};
 use support::{
-	decl_module, decl_storage, decl_event, ensure, StorageValue, StorageMap, StorageLinkedMap,
+	decl_module, decl_storage, decl_event, ensure,
 	Parameter,
 	traits::{
 		Currency, ReservableCurrency, LockableCurrency, WithdrawReason, LockIdentifier, Get,
@@ -562,7 +562,7 @@ decl_module! {
 
 		fn on_initialize(n: T::BlockNumber) {
 			if let Err(e) = Self::end_block(n) {
-				runtime_io::print(e);
+				sr_primitives::print(e);
 			}
 		}
 

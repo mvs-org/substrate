@@ -254,7 +254,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use rstd::marker::PhantomData;
-use support::{StorageValue, dispatch::Result, decl_module, decl_storage, decl_event};
+use support::{dispatch::Result, decl_module, decl_storage, decl_event};
 use system::{ensure_signed, ensure_root};
 use codec::{Encode, Decode};
 use sr_primitives::{
@@ -579,7 +579,7 @@ impl<T: Trait + Send + Sync> SignedExtension for WatchDummy<T> {
 		// check for `set_dummy`
 		match call {
 			Call::set_dummy(..) => {
-				runtime_io::print("set_dummy was received.");
+				sr_primitives::print("set_dummy was received.");
 
 				let mut valid_tx = ValidTransaction::default();
 				valid_tx.priority = Bounded::max_value();

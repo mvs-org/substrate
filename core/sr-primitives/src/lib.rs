@@ -47,6 +47,7 @@ pub mod testing;
 
 pub mod weights;
 pub mod traits;
+pub mod curve;
 
 pub mod generic;
 pub mod transaction_validity;
@@ -56,9 +57,15 @@ pub use generic::{DigestItem, Digest};
 
 /// Re-export this since it's part of the API of this crate.
 pub use primitives::crypto::{key_types, KeyTypeId, CryptoType};
-pub use app_crypto::AppKey;
+pub use app_crypto::RuntimeAppPublic;
 
-/// Justification type.
+/// An abstraction over justification for a block's validity under a consensus algorithm.
+///
+/// Essentially a finality proof. The exact formulation will vary between consensus
+/// algorithms. In the case where there are multiple valid proofs, inclusion within
+/// the block itself would allow swapping justifications to change the block's hash
+/// (and thus fork the chain). Sending a `Justification` alongside a block instead
+/// bypasses this problem.
 pub type Justification = Vec<u8>;
 
 use traits::{Verify, Lazy};
@@ -699,7 +706,7 @@ impl DispatchError {
 	}
 }
 
-impl runtime_io::Printable for DispatchError {
+impl traits::Printable for DispatchError {
 	fn print(&self) {
 		"DispatchError".print();
 		if let Some(module) = self.module {
@@ -893,6 +900,11 @@ impl<'a> ::serde::Deserialize<'a> for OpaqueExtrinsic {
 impl traits::Extrinsic for OpaqueExtrinsic {
 	type Call = ();
 	type SignaturePayload = ();
+}
+
+/// Print something that implements `Printable` from the runtime.
+pub fn print(print: impl traits::Printable) {
+	print.print();
 }
 
 #[cfg(test)]

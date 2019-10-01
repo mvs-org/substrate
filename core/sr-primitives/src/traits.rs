@@ -39,7 +39,7 @@ use rstd::ops::{
 	Add, Sub, Mul, Div, Rem, AddAssign, SubAssign, MulAssign, DivAssign,
 	RemAssign, Shl, Shr
 };
-use crate::AppKey;
+use app_crypto::AppKey;
 use impl_trait_for_tuples::impl_for_tuples;
 
 /// A lazy value.
@@ -439,8 +439,9 @@ pub trait OffchainWorker<BlockNumber> {
 }
 
 /// Abstraction around hashing
-pub trait Hash: 'static + MaybeSerializeDebug + Clone + Eq + PartialEq {	// Stupid bug in the Rust compiler believes derived
-																	// traits must be fulfilled by all type parameters.
+// Stupid bug in the Rust compiler believes derived
+// traits must be fulfilled by all type parameters.
+pub trait Hash: 'static + MaybeSerializeDebug + Clone + Eq + PartialEq {
 	/// The hash type produced.
 	type Output: Member + MaybeSerializeDebug + rstd::hash::Hash + AsRef<[u8]> + AsMut<[u8]> + Copy
 		+ Default + Encode + Decode;
@@ -456,18 +457,11 @@ pub trait Hash: 'static + MaybeSerializeDebug + Clone + Eq + PartialEq {	// Stup
 		Encode::using_encoded(s, Self::hash)
 	}
 
-	/// Iterator-based version of `ordered_trie_root`.
-	fn ordered_trie_root<
-		I: IntoIterator<Item = A>,
-		A: AsRef<[u8]>
-	>(input: I) -> Self::Output;
+	/// The ordered Patricia tree root of the given `input`.
+	fn ordered_trie_root(input: Vec<Vec<u8>>) -> Self::Output;
 
-	/// The Patricia tree root of the given mapping as an iterator.
-	fn trie_root<
-		I: IntoIterator<Item = (A, B)>,
-		A: AsRef<[u8]> + Ord,
-		B: AsRef<[u8]>
-	>(input: I) -> Self::Output;
+	/// The Patricia tree root of the given mapping.
+	fn trie_root(input: Vec<(Vec<u8>, Vec<u8>)>) -> Self::Output;
 
 	/// Acquire the global storage root.
 	fn storage_root() -> Self::Output;
@@ -487,22 +481,19 @@ impl Hash for BlakeTwo256 {
 	fn hash(s: &[u8]) -> Self::Output {
 		runtime_io::blake2_256(s).into()
 	}
-	fn trie_root<
-		I: IntoIterator<Item = (A, B)>,
-		A: AsRef<[u8]> + Ord,
-		B: AsRef<[u8]>
-	>(input: I) -> Self::Output {
-		runtime_io::trie_root::<Blake2Hasher, _, _, _>(input).into()
+
+	fn trie_root(input: Vec<(Vec<u8>, Vec<u8>)>) -> Self::Output {
+		runtime_io::blake2_256_trie_root(input)
 	}
-	fn ordered_trie_root<
-		I: IntoIterator<Item = A>,
-		A: AsRef<[u8]>
-	>(input: I) -> Self::Output {
-		runtime_io::ordered_trie_root::<Blake2Hasher, _, _>(input).into()
+
+	fn ordered_trie_root(input: Vec<Vec<u8>>) -> Self::Output {
+		runtime_io::blake2_256_ordered_trie_root(input)
 	}
+
 	fn storage_root() -> Self::Output {
 		runtime_io::storage_root().into()
 	}
+
 	fn storage_changes_root(parent_hash: Self::Output) -> Option<Self::Output> {
 		runtime_io::storage_changes_root(parent_hash.into()).map(Into::into)
 	}
@@ -519,16 +510,20 @@ impl CheckEqual for primitives::H256 {
 	fn check_equal(&self, other: &Self) {
 		use primitives::hexdisplay::HexDisplay;
 		if self != other {
-			println!("Hash: given={}, expected={}", HexDisplay::from(self.as_fixed_bytes()), HexDisplay::from(other.as_fixed_bytes()));
+			println!(
+				"Hash: given={}, expected={}",
+				HexDisplay::from(self.as_fixed_bytes()),
+				HexDisplay::from(other.as_fixed_bytes()),
+			);
 		}
 	}
 
 	#[cfg(not(feature = "std"))]
 	fn check_equal(&self, other: &Self) {
 		if self != other {
-			runtime_io::print("Hash not equal");
-			runtime_io::print(self.as_bytes());
-			runtime_io::print(other.as_bytes());
+			"Hash not equal".print();
+			self.as_bytes().print();
+			other.as_bytes().print();
 		}
 	}
 }
@@ -544,9 +539,9 @@ impl<H: PartialEq + Eq + MaybeDebug> CheckEqual for super::generic::DigestItem<H
 	#[cfg(not(feature = "std"))]
 	fn check_equal(&self, other: &Self) {
 		if self != other {
-			runtime_io::print("DigestItem not equal");
-			runtime_io::print(&Encode::encode(self)[..]);
-			runtime_io::print(&Encode::encode(other)[..]);
+			"DigestItem not equal".print();
+			(&Encode::encode(self)[..]).print();
+			(&Encode::encode(other)[..]).print();
 		}
 	}
 }
@@ -1157,6 +1152,129 @@ impl<T: Encode + Decode + Default, Id: Encode + Decode + TypeId> AccountIdConver
 	}
 }
 
+/// Calls a given macro a number of times with a set of fixed params and an incrementing numeral.
+/// e.g.
+/// ```nocompile
+/// count!(println ("{}",) foo, bar, baz);
+/// // Will result in three `println!`s: "0", "1" and "2".
+/// ```
+#[macro_export]
+macro_rules! count {
+	($f:ident ($($x:tt)*) ) => ();
+	($f:ident ($($x:tt)*) $x1:tt) => { $f!($($x)* 0); };
+	($f:ident ($($x:tt)*) $x1:tt, $x2:tt) => { $f!($($x)* 0); $f!($($x)* 1); };
+	($f:ident ($($x:tt)*) $x1:tt, $x2:tt, $x3:tt) => { $f!($($x)* 0); $f!($($x)* 1); $f!($($x)* 2); };
+	($f:ident ($($x:tt)*) $x1:tt, $x2:tt, $x3:tt, $x4:tt) => {
+		$f!($($x)* 0); $f!($($x)* 1); $f!($($x)* 2); $f!($($x)* 3);
+	};
+	($f:ident ($($x:tt)*) $x1:tt, $x2:tt, $x3:tt, $x4:tt, $x5:tt) => {
+		$f!($($x)* 0); $f!($($x)* 1); $f!($($x)* 2); $f!($($x)* 3); $f!($($x)* 4);
+	};
+}
+
+/// Implement `OpaqueKeys` for a described struct.
+/// Would be much nicer for this to be converted to `derive` code.
+///
+/// Every field type must be equivalent implement `as_ref()`, which is expected
+/// to hold the standard SCALE-encoded form of that key. This is typically
+/// just the bytes of the key.
+///
+/// ```rust
+/// use sr_primitives::{impl_opaque_keys, KeyTypeId, app_crypto::{sr25519, ed25519}};
+/// use primitives::testing::{SR25519, ED25519};
+///
+/// impl_opaque_keys! {
+/// 	pub struct Keys {
+/// 		#[id(ED25519)]
+/// 		pub ed25519: ed25519::AppPublic,
+/// 		#[id(SR25519)]
+/// 		pub sr25519: sr25519::AppPublic,
+/// 	}
+/// }
+/// ```
+#[macro_export]
+macro_rules! impl_opaque_keys {
+	(
+		pub struct $name:ident {
+			$(
+				#[id($key_id:expr)]
+				pub $field:ident: $type:ty,
+			)*
+		}
+	) => {
+		#[derive(Default, Clone, PartialEq, Eq, $crate::codec::Encode, $crate::codec::Decode)]
+		#[cfg_attr(feature = "std", derive(Debug, $crate::serde::Serialize, $crate::serde::Deserialize))]
+		pub struct $name {
+			$(
+				pub $field: $type,
+			)*
+		}
+
+		impl $name {
+			/// Generate a set of keys with optionally using the given seed.
+			///
+			/// The generated key pairs are stored in the keystore.
+			///
+			/// Returns the concatenated SCALE encoded public keys.
+			pub fn generate(seed: Option<&str>) -> $crate::rstd::vec::Vec<u8> {
+				let keys = Self{
+					$(
+						$field: <$type as $crate::app_crypto::RuntimeAppPublic>::generate_pair(seed),
+					)*
+				};
+				$crate::codec::Encode::encode(&keys)
+			}
+		}
+
+		impl $crate::traits::OpaqueKeys for $name {
+			type KeyTypeIds = $crate::rstd::iter::Cloned<
+				$crate::rstd::slice::Iter<'static, $crate::KeyTypeId>
+			>;
+
+			fn key_ids() -> Self::KeyTypeIds {
+				[ $($key_id),* ].iter().cloned()
+			}
+
+			fn get_raw(&self, i: $crate::KeyTypeId) -> &[u8] {
+				match i {
+					$( i if i == $key_id => self.$field.as_ref(), )*
+					_ => &[],
+				}
+			}
+		}
+	};
+}
+
+/// Trait for things which can be printed from the runtime.
+pub trait Printable {
+	/// Print the object.
+	fn print(&self);
+}
+
+impl Printable for u8 {
+	fn print(&self) {
+		u64::from(*self).print()
+	}
+}
+
+impl Printable for &[u8] {
+	fn print(&self) {
+		runtime_io::print_hex(self);
+	}
+}
+
+impl Printable for &str {
+	fn print(&self) {
+		runtime_io::print_utf8(self.as_bytes());
+	}
+}
+
+impl Printable for u64 {
+	fn print(&self) {
+		runtime_io::print_num(*self);
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::AccountIdConversion;
@@ -1225,96 +1343,4 @@ mod tests {
 		assert_eq!(t.remaining_len(), Ok(None));
 		assert_eq!(buffer, [0, 0]);
 	}
-}
-
-/// Calls a given macro a number of times with a set of fixed params and an incrementing numeral.
-/// e.g.
-/// ```nocompile
-/// count!(println ("{}",) foo, bar, baz);
-/// // Will result in three `println!`s: "0", "1" and "2".
-/// ```
-#[macro_export]
-macro_rules! count {
-	($f:ident ($($x:tt)*) ) => ();
-	($f:ident ($($x:tt)*) $x1:tt) => { $f!($($x)* 0); };
-	($f:ident ($($x:tt)*) $x1:tt, $x2:tt) => { $f!($($x)* 0); $f!($($x)* 1); };
-	($f:ident ($($x:tt)*) $x1:tt, $x2:tt, $x3:tt) => { $f!($($x)* 0); $f!($($x)* 1); $f!($($x)* 2); };
-	($f:ident ($($x:tt)*) $x1:tt, $x2:tt, $x3:tt, $x4:tt) => {
-		$f!($($x)* 0); $f!($($x)* 1); $f!($($x)* 2); $f!($($x)* 3);
-	};
-	($f:ident ($($x:tt)*) $x1:tt, $x2:tt, $x3:tt, $x4:tt, $x5:tt) => {
-		$f!($($x)* 0); $f!($($x)* 1); $f!($($x)* 2); $f!($($x)* 3); $f!($($x)* 4);
-	};
-}
-
-/// Implement `OpaqueKeys` for a described struct.
-/// Would be much nicer for this to be converted to `derive` code.
-///
-/// Every field type must be equivalent implement `as_ref()`, which is expected
-/// to hold the standard SCALE-encoded form of that key. This is typically
-/// just the bytes of the key.
-///
-/// ```rust
-/// use sr_primitives::{impl_opaque_keys, key_types, KeyTypeId, app_crypto::{sr25519, ed25519}};
-///
-/// impl_opaque_keys! {
-/// 	pub struct Keys {
-/// 		#[id(key_types::ED25519)]
-/// 		pub ed25519: ed25519::AppPublic,
-/// 		#[id(key_types::SR25519)]
-/// 		pub sr25519: sr25519::AppPublic,
-/// 	}
-/// }
-/// ```
-#[macro_export]
-macro_rules! impl_opaque_keys {
-	(
-		pub struct $name:ident {
-			$(
-				#[id($key_id:expr)]
-				pub $field:ident: $type:ty,
-			)*
-		}
-	) => {
-		#[derive(Default, Clone, PartialEq, Eq, $crate::codec::Encode, $crate::codec::Decode)]
-		#[cfg_attr(feature = "std", derive(Debug, $crate::serde::Serialize, $crate::serde::Deserialize))]
-		pub struct $name {
-			$(
-				pub $field: $type,
-			)*
-		}
-
-		impl $name {
-			/// Generate a set of keys with optionally using the given seed.
-			///
-			/// The generated key pairs are stored in the keystore.
-			///
-			/// Returns the concatenated SCALE encoded public keys.
-			pub fn generate(seed: Option<&str>) -> $crate::rstd::vec::Vec<u8> {
-				let keys = Self{
-					$(
-						$field: <$type as $crate::app_crypto::RuntimeAppPublic>::generate_pair(seed),
-					)*
-				};
-				$crate::codec::Encode::encode(&keys)
-			}
-		}
-
-		impl $crate::traits::OpaqueKeys for $name {
-			type KeyTypeIds = $crate::rstd::iter::Cloned<
-				$crate::rstd::slice::Iter<'static, $crate::KeyTypeId>
-			>;
-
-			fn key_ids() -> Self::KeyTypeIds {
-				[ $($key_id),* ].iter().cloned()
-			}
-
-			fn get_raw(&self, i: $crate::KeyTypeId) -> &[u8] {
-				match i {
-					$( i if i == $key_id => self.$field.as_ref(), )*
-					_ => &[],
-				}
-			}
-		}
-	};
 }

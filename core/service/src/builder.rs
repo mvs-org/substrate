@@ -34,7 +34,9 @@ use parking_lot::{Mutex, RwLock};
 use primitives::{Blake2Hasher, H256, Hasher};
 use rpc::{self, system::SystemInfo};
 use sr_primitives::{BuildStorage, generic::BlockId};
-use sr_primitives::traits::{Block as BlockT, ProvideRuntimeApi, NumberFor, One, Zero, Header, SaturatedConversion};
+use sr_primitives::traits::{
+	Block as BlockT, Extrinsic, ProvideRuntimeApi, NumberFor, One, Zero, Header, SaturatedConversion
+};
 use substrate_executor::{NativeExecutor, NativeExecutionDispatch};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{io::{Read, Write, Seek}, marker::PhantomData, sync::Arc, sync::atomic::AtomicBool};
@@ -821,12 +823,9 @@ ServiceBuilder<
 			TBl
 		>,
 	>, Error> {
-		let mut config = self.config;
-		session::generate_initial_session_keys(
-			self.client.clone(),
-			config.dev_key_seed.clone().map(|s| vec![s]).unwrap_or_default()
-		)?;
-		let (
+		let ServiceBuilder {
+			marker: _,
+			mut config,
 			client,
 			fetcher,
 			backend,
@@ -840,21 +839,12 @@ ServiceBuilder<
 			rpc_extensions,
 			dht_event_tx,
 			rpc_builder,
-		) = (
-			self.client,
-			self.fetcher,
-			self.backend,
-			self.keystore,
-			self.select_chain,
-			self.import_queue,
-			self.finality_proof_request_builder,
-			self.finality_proof_provider,
-			self.network_protocol,
-			self.transaction_pool,
-			self.rpc_extensions,
-			self.dht_event_tx,
-			self.rpc_builder,
-		);
+		} = self;
+
+		session::generate_initial_session_keys(
+			client.clone(),
+			config.dev_key_seed.clone().map(|s| vec![s]).unwrap_or_default()
+		)?;
 
 		new_impl!(
 			TBl,
@@ -941,7 +931,13 @@ pub(crate) fn maintain_transaction_pool<Api, Backend, Block, Executor, PoolApi>(
 	for r in retracted {
 		if let Some(block) = client.block(&BlockId::hash(*r))? {
 			let extrinsics = block.block.extrinsics();
-			if let Err(e) = transaction_pool.submit_at(id, extrinsics.iter().cloned(), true) {
+			if let Err(e) = transaction_pool.submit_at(
+				id,
+				extrinsics.iter().filter(|e| {
+					e.is_signed().unwrap_or(false)
+				}).cloned(),
+				true
+			) {
 				warn!("Error re-submitting transactions: {:?}", e);
 			}
 		}
