@@ -32,7 +32,7 @@ use sc_telemetry::TelemetryEndpoints;
 use grandpa_primitives::{AuthorityId as GrandpaId};
 use babe_primitives::{AuthorityId as BabeId};
 use im_online::sr25519::{AuthorityId as ImOnlineId};
-use authority_discovery_primitives::AuthorityId as AuthorityDiscoveryId;
+use authority_discovery_primitives::sr25519::AuthorityId as AuthorityDiscoveryId;
 use sp_runtime::{Perbill, traits::{Verify, IdentifyAccount}};
 
 pub use node_primitives::{AccountId, Balance, Signature};

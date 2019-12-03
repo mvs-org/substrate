@@ -43,7 +43,7 @@ use primitives::OpaqueMetadata;
 use grandpa::AuthorityList as GrandpaAuthorityList;
 use grandpa::fg_primitives;
 use im_online::sr25519::{AuthorityId as ImOnlineId};
-use authority_discovery_primitives::AuthorityId as AuthorityDiscoveryId;
+use authority_discovery_primitives::sr25519::AuthorityId as AuthorityDiscoveryId;
 use transaction_payment_rpc_runtime_api::RuntimeDispatchInfo;
 use contracts_rpc_runtime_api::ContractExecResult;
 use system::offchain::TransactionSubmitter;
@@ -649,7 +649,7 @@ impl_runtime_apis! {
 		}
 	}
 
-	impl authority_discovery_primitives::AuthorityDiscoveryApi<Block> for Runtime {
+	impl authority_discovery_primitives::AuthorityDiscoveryApi<Block, AccountId> for Runtime {
 		fn authorities() -> Vec<AuthorityDiscoveryId> {
 			AuthorityDiscovery::authorities()
 		}

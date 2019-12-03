@@ -24,7 +24,7 @@
 
 use rstd::prelude::*;
 use support::{decl_module, decl_storage};
-use authority_discovery_primitives::AuthorityId;
+use authority_discovery_primitives::sr25519::AuthorityId;
 
 /// The module's config trait.
 pub trait Trait: system::Trait + session::Trait {}
@@ -92,7 +92,7 @@ impl<T: Trait> session::OneSessionHandler<T::AccountId> for Module<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use authority_discovery_primitives::{AuthorityPair};
+	use authority_discovery_primitives::sr25519::{AuthorityPair};
 	use app_crypto::Pair;
 	use primitives::{crypto::key_types, H256};
 	use runtime_io::TestExternalities;

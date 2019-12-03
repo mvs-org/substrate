@@ -45,16 +45,13 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::iter::FromIterator;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{sync::Arc, time::{Duration, Instant}, thread, marker::PhantomData, hash::Hash, fmt::Debug, pin::Pin};
 
 use futures::task::{Context, Poll};
 use futures::{Future, FutureExt, Stream, StreamExt};
 use futures_timer::Delay;
 
-use authority_discovery_primitives::{AuthorityDiscoveryApi, AuthorityId, AuthoritySignature, AuthorityPair};
+use authority_discovery_primitives::AuthorityDiscoveryApi;
 use client_api::blockchain::HeaderBackend;
 use codec::{Decode, Encode};
 use error::{Error, Result};
@@ -65,9 +62,11 @@ use primitives::crypto::{key_types, Pair};
 use primitives::traits::BareCryptoStorePtr;
 use prost::Message;
 use sp_runtime::generic::BlockId;
-use sp_runtime::traits::{Block as BlockT, ProvideRuntimeApi};
+use sp_runtime::traits::{Block as BlockT, ProvideRuntimeApi, Member};
 
 type Interval = Box<dyn Stream<Item = ()> + Unpin + Send + Sync>;
+
+type AuthorityId<P> = <P as Pair>::Public;
 
 mod error;
 /// Dht payload schemas generated from Protobuf definitions via Prost crate in build.rs.
@@ -82,12 +81,15 @@ const LIBP2P_KADEMLIA_BOOTSTRAP_TIME: Duration = Duration::from_secs(30);
 const AUTHORITIES_PRIORITY_GROUP_NAME: &'static str = "authorities";
 
 /// An `AuthorityDiscovery` makes a given authority discoverable and discovers other authorities.
-pub struct AuthorityDiscovery<Client, Network, Block>
+pub struct AuthorityDiscovery<Client, Network, Block, P>
 where
 	Block: BlockT + 'static,
 	Network: NetworkProvider,
 	Client: ProvideRuntimeApi + Send + Sync + 'static + HeaderBackend<Block>,
-	<Client as ProvideRuntimeApi>::Api: AuthorityDiscoveryApi<Block>,
+	<Client as ProvideRuntimeApi>::Api: AuthorityDiscoveryApi<Block, AuthorityId<P>>,
+	P: Pair + Send + Sync,
+	P::Public: Member + Encode + Decode + Hash,
+	P::Signature: Member + Encode + Decode + Hash + Debug,
 
 {
 	client: Arc<Client>,
@@ -107,17 +109,20 @@ where
 	/// addresses of other authorities one by one from the network. To use the peerset interface we need to cache the
 	/// addresses and always overwrite the entire peerset priority group. To ensure this map doesn't grow indefinitely
 	/// `purge_old_authorities_from_cache` function is called each time we add a new entry.
-	address_cache: HashMap<AuthorityId, Vec<libp2p::Multiaddr>>,
+	address_cache: HashMap<AuthorityId<P>, Vec<libp2p::Multiaddr>>,
 
 	phantom: PhantomData<Block>,
 }
 
-impl<Client, Network, Block> AuthorityDiscovery<Client, Network, Block>
+impl<Client, Network, Block, P> AuthorityDiscovery<Client, Network, Block, P>
 where
 	Block: BlockT + Unpin + 'static,
 	Network: NetworkProvider,
 	Client: ProvideRuntimeApi + Send + Sync + 'static + HeaderBackend<Block>,
-	<Client as ProvideRuntimeApi>::Api: AuthorityDiscoveryApi<Block, Error = sp_blockchain::Error>,
+	<Client as ProvideRuntimeApi>::Api: AuthorityDiscoveryApi<Block, AuthorityId<P>, Error = sp_blockchain::Error>,
+	P: Pair + Send + Sync,
+	P::Public: Member + Encode + Decode + Hash,
+	P::Signature: Member + Encode + Decode + Hash + Debug,
 	Self: Future<Output = ()>,
 {
 	/// Return a new authority discovery.
@@ -259,7 +264,7 @@ where
 
 		for (key, value) in values.iter() {
 			// Check if the event origins from an authority in the current authority set.
-			let authority_id: &AuthorityId = authorities
+			let authority_id: &AuthorityId<P> = authorities
 				.get(key)
 				.ok_or(Error::MatchingHashedAuthorityIdWithAuthorityId)?;
 
@@ -267,9 +272,9 @@ where
 				signature,
 				addresses,
 			} = schema::SignedAuthorityAddresses::decode(value).map_err(Error::DecodingProto)?;
-			let signature = AuthoritySignature::decode(&mut &signature[..]).map_err(Error::EncodingDecodingScale)?;
+			let signature = P::Signature::decode(&mut &signature[..]).map_err(Error::EncodingDecodingScale)?;
 
-			if !AuthorityPair::verify(&signature, &addresses, authority_id) {
+			if !P::verify(&signature, &addresses, authority_id) {
 				return Err(Error::VerifyingDhtPayload);
 			}
 
@@ -301,14 +306,14 @@ where
 		Ok(())
 	}
 
-	fn purge_old_authorities_from_cache(&mut self, current_authorities: &Vec<AuthorityId>) {
+	fn purge_old_authorities_from_cache(&mut self, current_authorities: &Vec<AuthorityId<P>>) {
 		self.address_cache
 			.retain(|peer_id, _addresses| current_authorities.contains(peer_id))
 	}
 
 	/// Retrieve all local authority discovery private keys that are within the current authority
 	/// set.
-	fn get_priv_keys_within_authority_set(&mut self) -> Result<Vec<AuthorityPair>> {
+	fn get_priv_keys_within_authority_set(&mut self) -> Result<Vec<P::Pair>> {
 		let keys = self.get_own_public_keys_within_authority_set()?
 			.into_iter()
 			.map(std::convert::Into::into)
@@ -327,7 +332,7 @@ where
 	// one for the upcoming session. In addition it could be participating in the current authority
 	// set with two keys. The function does not return all of the local authority discovery public
 	// keys, but only the ones intersecting with the current authority set.
-	fn get_own_public_keys_within_authority_set(&mut self) -> Result<HashSet<AuthorityId>> {
+	fn get_own_public_keys_within_authority_set(&mut self) -> Result<HashSet<AuthorityId<P>>> {
 		let local_pub_keys = self.key_store
 			.read()
 			.sr25519_public_keys(key_types::AUTHORITY_DISCOVERY)
@@ -353,12 +358,15 @@ where
 	}
 }
 
-impl<Client, Network, Block> Future for AuthorityDiscovery<Client, Network, Block>
+impl<Client, Network, Block, P> Future for AuthorityDiscovery<Client, Network, Block, P>
 where
 	Block: BlockT + Unpin + 'static,
 	Network: NetworkProvider,
 	Client: ProvideRuntimeApi + Send + Sync + 'static + HeaderBackend<Block>,
-	<Client as ProvideRuntimeApi>::Api: AuthorityDiscoveryApi<Block, Error = sp_blockchain::Error>,
+	<Client as ProvideRuntimeApi>::Api: AuthorityDiscoveryApi<Block, AuthorityId<P>, Error = sp_blockchain::Error>,
+	P: Pair + Send + Sync,
+	P::Public: Member + Encode + Decode + Hash,
+	P::Signature: Member + Encode + Decode + Hash + Debug,
 {
 	type Output = ();
 
@@ -481,6 +489,7 @@ mod tests {
 	use sp_runtime::traits::{ApiRef, Block as BlockT, NumberFor, ProvideRuntimeApi};
 	use std::sync::{Arc, Mutex};
 	use test_client::runtime::Block;
+	use authority_discovery_primitives::sr25519::{AuthorityId, AuthorityPair};
 
 	#[derive(Clone)]
 	struct TestApi {

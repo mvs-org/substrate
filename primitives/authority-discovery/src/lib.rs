@@ -18,29 +18,49 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use codec::{Codec};
 use rstd::vec::Vec;
 
-mod app {
-	use app_crypto::{app_crypto, key_types::AUTHORITY_DISCOVERY, sr25519};
-	app_crypto!(sr25519, AUTHORITY_DISCOVERY);
+pub mod sr25519 {
+	mod app_sr25519 {
+		use app_crypto::{app_crypto, key_types::AUTHORITY_DISCOVERY, sr25519};
+		app_crypto!(sr25519, AUTHORITY_DISCOVERY);
+	}
+
+	/// An authority_discovery authority keypair using S/R 25519 as its crypto.
+	#[cfg(feature = "std")]
+	pub type AuthorityPair = app_sr25519::Pair;
+
+	/// An authority_discovery authority signature using S/R 25519 as its crypto.
+	pub type AuthoritySignature = app_sr25519::Signature;
+
+	/// An authority_discovery authority identifier using S/R 25519 as its crypto.
+	pub type AuthorityId = app_sr25519::Public;
 }
 
-/// An authority discovery authority keypair.
-#[cfg(feature = "std")]
-pub type AuthorityPair = app::Pair;
+pub mod ed25519 {
+	mod app_ed25519 {
+		use app_crypto::{app_crypto, key_types::AUTHORITY_DISCOVERY, ed25519};
+		app_crypto!(ed25519, AUTHORITY_DISCOVERY);
+	}
 
-/// An authority discovery authority identifier.
-pub type AuthorityId = app::Public;
+	/// An authority_discovery authority keypair using Ed25519 as its crypto.
+	#[cfg(feature = "std")]
+	pub type AuthorityPair = app_ed25519::Pair;
 
-/// An authority discovery authority signature.
-pub type AuthoritySignature = app::Signature;
+	/// An authority_discovery authority signature using Ed25519 as its crypto.
+	pub type AuthoritySignature = app_ed25519::Signature;
+
+	/// An authority_discovery authority identifier using Ed25519 as its crypto.
+	pub type AuthorityId = app_ed25519::Public;
+}
 
 sp_api::decl_runtime_apis! {
 	/// The authority discovery api.
 	///
 	/// This api is used by the `core/authority-discovery` module to retrieve identifiers
 	/// of the current authority set.
-	pub trait AuthorityDiscoveryApi {
+	pub trait AuthorityDiscoveryApi<AuthorityId: Codec> {
 		/// Retrieve authority identifiers of the current authority set.
 		fn authorities() -> Vec<AuthorityId>;
 	}
