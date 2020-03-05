@@ -345,6 +345,14 @@ pub trait OnInitialize<BlockNumber> {
 	fn on_initialize(_n: BlockNumber) {}
 }
 
+/// The runtime upgrade trait. Implementing this lets you express what should happen
+/// when the runtime upgrades, and changes may need to occur to your module.
+#[impl_for_tuples(30)]
+pub trait OnRuntimeUpgrade {
+	/// Perform a module upgrade.
+	fn on_runtime_upgrade() {}
+}
+
 /// Off-chain computation trait.
 ///
 /// Implementing this trait on a module allows you to perform long-running tasks
@@ -879,17 +887,11 @@ impl SignedExtension for () {
 /// Also provides information on to whom this information is attributable and an index that allows
 /// each piece of attributable information to be disambiguated.
 pub trait Applyable: Sized + Send + Sync {
-	/// ID of the account that is responsible for this piece of information (sender).
-	type AccountId: Member + MaybeDisplay;
-
 	/// Type by which we can dispatch. Restricts the `UnsignedValidator` type.
 	type Call;
 
 	/// An opaque set of information attached to the transaction.
 	type DispatchInfo: Clone;
-
-	/// Returns a reference to the sender if any.
-	fn sender(&self) -> Option<&Self::AccountId>;
 
 	/// Checks to see if this is a valid *transaction*. It returns information on it if so.
 	fn validate<V: ValidateUnsigned<Call=Self::Call>>(

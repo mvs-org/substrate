@@ -39,7 +39,7 @@ use sp_consensus::{
 use std::{
 	collections::{HashMap, HashSet},
 	result,
-	pin::Pin, task,
+	pin::Pin,
 };
 use parity_scale_codec::Decode;
 use sp_runtime::traits::{Block as BlockT, Header as HeaderT, HashFor};
@@ -171,8 +171,7 @@ impl TestNetFactory for GrandpaTestNet {
 	) -> Option<Arc<dyn sc_network::config::FinalityProofProvider<Block>>> {
 		match client {
 			PeersClient::Full(_, ref backend)  => {
-				let authorities_provider = Arc::new(self.test_config.clone());
-				Some(Arc::new(FinalityProofProvider::new(backend.clone(), authorities_provider)))
+				Some(Arc::new(FinalityProofProvider::new(backend.clone(), self.test_config.clone())))
 			},
 			PeersClient::Light(_, _) => None,
 		}
@@ -188,17 +187,6 @@ impl TestNetFactory for GrandpaTestNet {
 
 	fn mut_peers<F: FnOnce(&mut Vec<GrandpaPeer>)>(&mut self, closure: F) {
 		closure(&mut self.peers);
-	}
-}
-
-#[derive(Clone)]
-struct Exit;
-
-impl futures::Future for Exit {
-	type Output = ();
-
-	fn poll(self: Pin<&mut Self>, _: &mut task::Context) -> task::Poll<()> {
-		task::Poll::Pending
 	}
 }
 
@@ -445,7 +433,6 @@ fn run_to_completion_with<F>(
 			link: link,
 			network: net_service,
 			inherent_data_providers: InherentDataProviders::new(),
-			on_exit: Exit,
 			telemetry_on_connect: None,
 			voting_rule: (),
 			prometheus_registry: None,
@@ -577,7 +564,6 @@ fn finalize_3_voters_1_full_observer() {
 			link: link,
 			network: net_service,
 			inherent_data_providers: InherentDataProviders::new(),
-			on_exit: Exit,
 			telemetry_on_connect: None,
 			voting_rule: (),
 			prometheus_registry: None,
@@ -741,7 +727,6 @@ fn transition_3_voters_twice_1_full_observer() {
 			link: link,
 			network: net_service,
 			inherent_data_providers: InherentDataProviders::new(),
-			on_exit: Exit,
 			telemetry_on_connect: None,
 			voting_rule: (),
 			prometheus_registry: None,
@@ -1167,7 +1152,6 @@ fn voter_persists_its_votes() {
 							link,
 							network: this.net.lock().peers[0].network_service().clone(),
 							inherent_data_providers: InherentDataProviders::new(),
-							on_exit: Exit,
 							telemetry_on_connect: None,
 							voting_rule: VotingRulesBuilder::default().build(),
 							prometheus_registry: None,
@@ -1383,7 +1367,6 @@ fn finalize_3_voters_1_light_observer() {
 				},
 				link,
 				net.lock().peers[3].network_service().clone(),
-				Exit,
 			).unwrap()
 		);
 
@@ -1513,7 +1496,6 @@ fn voter_catches_up_to_latest_round_when_behind() {
 			link,
 			network: net.lock().peer(peer_id).network_service().clone(),
 			inherent_data_providers: InherentDataProviders::new(),
-			on_exit: Exit,
 			telemetry_on_connect: None,
 			voting_rule: (),
 			prometheus_registry: None,

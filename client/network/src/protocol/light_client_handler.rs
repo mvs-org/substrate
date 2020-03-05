@@ -254,12 +254,13 @@ where
 	B: Block,
 {
 	/// Construct a new light client handler.
-	pub fn new(
-		cfg: Config,
-		chain: Arc<dyn Client<B>>,
-		checker: Arc<dyn fetcher::FetchChecker<B>>,
-		peerset: sc_peerset::PeersetHandle,
-	) -> Self {
+	pub fn new
+		( cfg: Config
+		, chain: Arc<dyn Client<B>>
+		, checker: Arc<dyn fetcher::FetchChecker<B>>
+		, peerset: sc_peerset::PeersetHandle
+		) -> Self
+	{
 		LightClientHandler {
 			config: cfg,
 			chain,
@@ -424,8 +425,7 @@ where
 		log::trace!("remote call request from {} ({} at {:?})",
 			peer,
 			request.method,
-			request.block,
-		);
+			request.block);
 
 		let block = Decode::decode(&mut request.block.as_ref())?;
 
@@ -436,8 +436,7 @@ where
 					peer,
 					request.method,
 					request.block,
-					e,
-				);
+					e);
 				StorageProof::empty()
 			}
 		};
@@ -468,7 +467,7 @@ where
 
 		let block = Decode::decode(&mut request.block.as_ref())?;
 
-		let proof = match self.chain.read_proof(&block, &request.keys) {
+		let proof = match self.chain.read_proof(&block, &mut request.keys.iter().map(AsRef::as_ref)) {
 			Ok(proof) => proof,
 			Err(error) => {
 				log::trace!("remote read request from {} ({} at {:?}) failed with: {}",
@@ -509,7 +508,12 @@ where
 
 		let proof =
 			if let Some(info) = ChildInfo::resolve_child_info(request.child_type, &request.child_info[..]) {
-				match self.chain.read_child_proof(&block, &request.storage_key, info, &request.keys) {
+				match self.chain.read_child_proof(
+					&block,
+					&request.storage_key,
+					info,
+					&mut request.keys.iter().map(AsRef::as_ref)
+				) {
 					Ok(proof) => proof,
 					Err(error) => {
 						log::trace!("remote read child request from {} ({} {} at {:?}) failed with: {}",
