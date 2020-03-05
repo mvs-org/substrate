@@ -370,6 +370,8 @@ decl_storage! {
 		///
 		/// True for new networks.
 		IsUpgraded build(|_: &GenesisConfig<T, I>| true): bool;
+		/// Custom flag for Edgeware upgrade
+		IsEdgewareUpgraded build(|_: &GenesisConfig<T, I>| false): bool;
 	}
 	add_extra_genesis {
 		config(balances): Vec<(T::AccountId, T::Balance)>;
@@ -518,8 +520,8 @@ decl_module! {
 		}
 
 		fn on_initialize() {
-			if !IsUpgraded::<I>::get() {
-				IsUpgraded::<I>::put(true);
+			if !IsEdgewareUpgraded::<I>::get() {
+				IsEdgewareUpgraded::<I>::put(true);
 				Self::do_upgrade();
 			}
 		}
