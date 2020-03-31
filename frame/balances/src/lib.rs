@@ -148,6 +148,8 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+mod migration;
+
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
@@ -527,6 +529,11 @@ decl_module! {
 			let transactor = ensure_signed(origin)?;
 			let dest = T::Lookup::lookup(dest)?;
 			<Self as Currency<_>>::transfer(&transactor, &dest, value, KeepAlive)?;
+		}
+
+		/// Called when the runtime is upgraded.
+		fn on_runtime_upgrade() {
+			migration::on_runtime_upgrade::<T, I>();
 		}
 	}
 }
