@@ -524,11 +524,6 @@ decl_module! {
 			let dest = T::Lookup::lookup(dest)?;
 			<Self as Currency<_>>::transfer(&transactor, &dest, value, KeepAlive)?;
 		}
-
-		/// Called when the runtime is upgraded.
-		fn on_runtime_upgrade() {
-			migration::on_runtime_upgrade::<T, I>();
-		}
 	}
 }
 
