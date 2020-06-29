@@ -78,8 +78,11 @@ pub fn migrate_account<T: Trait>(a: &T::AccountId) {
 pub fn migrate_all<T: Trait>() -> Weight {
 	sp_runtime::print("🕊️  Migrating Democracy...");
 	let mut weight = 0;
+	sp_runtime::print("Democracy: Hasher");
 	weight += migrate_hasher::<T>();
+	sp_runtime::print("Democracy: Remove Unused");
 	weight += migrate_remove_unused_storage::<T>();
+	sp_runtime::print("Democracy: ReferendumInfo");
 	weight += migrate_referendum_info::<T>();
 	sp_runtime::print("🕊️  Done Democracy.");
 	weight
@@ -89,11 +92,13 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 	// TODO: is this valid?
 	Blacklist::<T>::remove_all();
 	Cancellations::<T>::remove_all();
-	// Not this only migrates the hasher, `ReferendumInfoOf` is fully migrated in
+	// Note this only migrates the hasher, `ReferendumInfoOf` is fully migrated in
 	// `migrate_referendum_info`.
+	sp_runtime::print("Democracy: Hasher: ReferendumInfo");
 	for i in LowestUnbaked::get()..ReferendumCount::get() {
 		deprecated::ReferendumInfoOf::<T>::migrate_key_from_blake(i);
 	}
+	sp_runtime::print("Democracy: Hasher: PublicProps");
 	for (p, h, _) in PublicProps::<T>::get().into_iter() {
 		DepositOf::<T>::migrate_key_from_blake(p);
 		Preimages::<T>::migrate_key_from_blake(h);
