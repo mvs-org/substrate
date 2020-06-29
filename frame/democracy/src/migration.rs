@@ -9,7 +9,7 @@ mod deprecated {
 	use sp_runtime::RuntimeDebug;
 	use sp_std::convert::TryFrom;
 
-	use crate::{Trait, ReferendumIndex, Conviction, vote_threshold::VoteThreshold};
+	use crate::{Trait, BalanceOf, PropIndex, ReferendumIndex, Conviction, vote_threshold::VoteThreshold};
 
 	#[derive(Copy, Clone, Eq, PartialEq, Default, RuntimeDebug)]
 	pub struct Vote {
@@ -67,6 +67,9 @@ mod deprecated {
 			pub ReferendumInfoOf get(fn referendum_info):
 				map hasher(twox_64_concat) ReferendumIndex
 				=> Option<ReferendumInfo<T::BlockNumber, T::Hash>>;
+
+			pub DepositOf get(fn deposit_of):
+				map hasher(opaque_blake2_256) PropIndex => Option<(BalanceOf<T>, Vec<T::AccountId>)>;
 		}
 	}
 }
@@ -100,7 +103,10 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 	}
 	sp_runtime::print("Democracy: Hasher: PublicProps");
 	for (p, h, _) in PublicProps::<T>::get().into_iter() {
-		DepositOf::<T>::migrate_key_from_blake(p);
+		// based on [democracy weights PR](https://github.com/paritytech/substrate/pull/5828/)
+		if let Some((balance, accounts)) = deprecated::DepositOf::<T>::take(p) {
+			DepositOf::<T>::insert(p, (accounts, balance));
+		}
 		Preimages::<T>::migrate_key_from_blake(h);
 	}
 	// TODO: figure out actual weight
