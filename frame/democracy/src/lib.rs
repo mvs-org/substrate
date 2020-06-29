@@ -184,6 +184,8 @@ mod tests;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 
+pub mod migration;
+
 const DEMOCRACY_ID: LockIdentifier = *b"democrac";
 
 /// The maximum number of vetoers on a single proposal used to compute Weight.
@@ -569,7 +571,7 @@ mod weight_for {
 
 impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
 	fn migrate_account(a: &T::AccountId) {
-		migration::migrate_account::<T>()
+		migration::migrate_account::<T>(a)
 	}
 }
 

@@ -5,11 +5,11 @@ mod deprecated {
 	use sp_std::prelude::*;
 
 	use codec::{Encode, EncodeLike, Decode, Input, Output};
-	use frame_support::{decl_module, decl_storage};
+	use frame_support::{decl_module, decl_storage, Parameter};
 	use sp_runtime::RuntimeDebug;
 	use sp_std::convert::TryFrom;
 
-	use crate::{Trait, ReferendumIndex, Conviction};
+	use crate::{Trait, ReferendumIndex, Conviction, vote_threshold::VoteThreshold};
 
 	#[derive(Copy, Clone, Eq, PartialEq, Default, RuntimeDebug)]
 	pub struct Vote {
@@ -36,6 +36,18 @@ mod deprecated {
 		}
 	}
 
+	#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug)]
+	pub struct ReferendumInfo<BlockNumber: Parameter, Hash: Parameter> {
+		/// When voting on this referendum will end.
+		end: BlockNumber,
+		/// The hash of the proposal being voted on.
+		proposal_hash: Hash,
+		/// The thresholding mechanism to determine whether it passed.
+		threshold: VoteThreshold,
+		/// The delay (in blocks) to wait after a successful referendum before deploying.
+		delay: BlockNumber,
+	}
+
 	decl_module! {
 		pub struct Module<T: Trait> for enum Call where origin: T::Origin { }
 	}
@@ -49,20 +61,26 @@ mod deprecated {
 				map hasher(opaque_blake2_256) T::AccountId => Option<T::AccountId>;
 			pub Delegations get(fn delegations):
 				map hasher(opaque_blake2_256) T::AccountId => (T::AccountId, Conviction);
+			
+			// Note these actually used to be `blake2_256`, but this way we can migrate them
+			// to then make use of them in the other migration.
+			pub ReferendumInfoOf get(fn referendum_info):
+				map hasher(twox_64_concat) ReferendumIndex
+				=> Option<ReferendumInfo<T::BlockNumber, T::Hash>>;
 		}
 	}
 }
 
-pub fn migrate_account<T: Trait>() {
+pub fn migrate_account<T: Trait>(a: &T::AccountId) {
 	Locks::<T>::migrate_key_from_blake(a);
 }
 
 pub fn migrate_all<T: Trait>() -> Weight {
 	sp_runtime::print("🕊️  Migrating Democracy...");
 	let mut weight = 0;
-	weight += migrate_hasher();
-	weight += migrate_remove_unused_storage();
-	weight += migrate_referendum_info();
+	weight += migrate_hasher::<T>();
+	weight += migrate_remove_unused_storage::<T>();
+	weight += migrate_referendum_info::<T>();
 	sp_runtime::print("🕊️  Done Democracy.");
 	weight
 }
@@ -71,7 +89,11 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 	// TODO: is this valid?
 	Blacklist::<T>::remove_all();
 	Cancellations::<T>::remove_all();
-	// ReferendumInfoOf is migrated in `migrate_referendum_info`
+	// Not this only migrates the hasher, `ReferendumInfoOf` is fully migrated in
+	// `migrate_referendum_info`.
+	for i in LowestUnbaked::get()..ReferendumCount::get() {
+		deprecated::ReferendumInfoOf::<T>::migrate_key_from_blake(i);
+	}
 	for (p, h, _) in PublicProps::<T>::get().into_iter() {
 		DepositOf::<T>::migrate_key_from_blake(p);
 		Preimages::<T>::migrate_key_from_blake(h);
@@ -80,7 +102,7 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 	0
 }
 
-pub fn migrate_remove_unused_storage() -> Weight {
+pub fn migrate_remove_unused_storage<T: Trait>() -> Weight {
 	// TODO: is this valid?
 	deprecated::VotersFor::<T>::remove_all();
 	deprecated::VoteOf::<T>::remove_all();
@@ -91,18 +113,18 @@ pub fn migrate_remove_unused_storage() -> Weight {
 }
 
 // migration based on [substrate/#5294](https://github.com/paritytech/substrate/pull/5294)
-pub fn migrate_referendum_info() -> Weight {
-	use frame_support::{Twox64Concat, migration::{StorageKeyIterator, remove_storage_prefix}};
+pub fn migrate_referendum_info<T: Trait>() -> Weight {
+	use frame_support::{Twox64Concat, migration::{StorageKeyIterator}};
 	
 	let range = LowestUnbaked::get()..ReferendumCount::get();
 	for (index, (end, proposal_hash, threshold, delay))
 		in StorageKeyIterator::<
 			ReferendumIndex,
 			(T::BlockNumber, T::Hash, VoteThreshold, T::BlockNumber),
-			Blake2_256,
+			Twox64Concat,
 		>::new(b"Democracy", b"ReferendumInfoOf").drain()
 	{
-		if range.contains(index) {
+		if range.contains(&index) {
 			let status = ReferendumStatus {
 				end, proposal_hash, threshold, delay, tally: Tally::default()
 			};
