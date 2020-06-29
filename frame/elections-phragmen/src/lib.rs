@@ -711,6 +711,8 @@ impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
 			}
 			decl_storage! {
 				trait Store for Module<T: Trait> as PhragmenElection {
+					// Note these actually used to be `blake2_256`, but this way we can migrate them
+					// to then make use of them in the other migration.
 					pub VotesOf get(fn votes_of):
 						map hasher(twox_64_concat) T::AccountId => Vec<T::AccountId>;
 					pub StakeOf get(fn stake_of):
