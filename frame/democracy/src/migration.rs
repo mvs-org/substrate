@@ -104,6 +104,7 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 	sp_runtime::print("Democracy: Hasher: PublicProps");
 	for (p, h, _) in PublicProps::<T>::get().into_iter() {
 		// based on [democracy weights PR](https://github.com/paritytech/substrate/pull/5828/)
+		frame_support::runtime_print!("PublicProps key: {:?}", deprecated::DepositOf::<T>::hashed_key_for(p));
 		if let Some((balance, accounts)) = deprecated::DepositOf::<T>::take(p) {
 			DepositOf::<T>::insert(p, (accounts, balance));
 		}
