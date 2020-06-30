@@ -105,15 +105,15 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 		deprecated::ReferendumInfoOf::<T>::migrate_key_from_blake(i);
 	}
 	sp_runtime::print("Democracy: Hasher: PublicProps");
-	for (p, h, _) in PublicProps::<T>::get().into_iter() {
+	for (prop_idx, prop_hash, _) in PublicProps::<T>::get().into_iter() {
 		// based on [democracy weights PR](https://github.com/paritytech/substrate/pull/5828/)
-		frame_support::runtime_print!("PublicProps key: {:?}", deprecated::DepositOf::<T>::hashed_key_for(p));
-		if let Some((balance, accounts)) = deprecated::DepositOf::<T>::take(p) {
-			DepositOf::<T>::insert(p, (accounts, balance));
+		if let Some((deposit, depositors)) = deprecated::DepositOf::<T>::take(prop_idx) {
+			DepositOf::<T>::insert(prop_idx, (depositors, deposit));
 		}
-		frame_support::runtime_print!("PublicProps key: {:?}", deprecated::Preimages::<T>::hashed_key_for(h));
-		if let Some((data, provider, deposit, since)) = deprecated::Preimages::<T>::take(h) {
-			Preimages::<T>::insert(h, PreimageStatus::Available{data, provider, deposit, since, expiry: None});
+		// necessary because of [scheduler PR](https://github.com/paritytech/substrate/pull/5412)
+		frame_support::runtime_print!("Preimages key: {:?}", deprecated::Preimages::<T>::hashed_key_for(prop_hash));
+		if let Some((data, provider, deposit, since)) = deprecated::Preimages::<T>::take(prop_hash) {
+			Preimages::<T>::insert(prop_hash, PreimageStatus::Available{data, provider, deposit, since, expiry: None});
 		}
 	}
 	// TODO: figure out actual weight
