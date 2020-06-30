@@ -453,7 +453,8 @@ decl_storage! {
 		ExtrinsicData get(fn extrinsic_data): map hasher(twox_64_concat) u32 => Vec<u8>;
 
 		/// The current block number being processed. Set by `execute_block`.
-		Number get(fn block_number): T::BlockNumber;
+		// make block number public so we can set it in `Executive` for the block hash migration
+		pub Number get(fn block_number): T::BlockNumber;
 
 		/// Hash of the previous block.
 		ParentHash get(fn parent_hash) build(|_| hash69()): T::Hash;
