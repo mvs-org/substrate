@@ -70,6 +70,9 @@ mod deprecated {
 
 			pub DepositOf get(fn deposit_of):
 				map hasher(opaque_blake2_256) PropIndex => Option<(BalanceOf<T>, Vec<T::AccountId>)>;
+			pub Preimages:
+				map hasher(opaque_blake2_256) T::Hash
+				=> Option<(Vec<u8>, T::AccountId, BalanceOf<T>, T::BlockNumber)>;
 		}
 	}
 }
@@ -108,7 +111,10 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 		if let Some((balance, accounts)) = deprecated::DepositOf::<T>::take(p) {
 			DepositOf::<T>::insert(p, (accounts, balance));
 		}
-		Preimages::<T>::migrate_key_from_blake(h);
+		frame_support::runtime_print!("PublicProps key: {:?}", deprecated::Preimages::<T>::hashed_key_for(h));
+		if let Some((data, provider, deposit, since)) = deprecated::Preimages::<T>::take(h) {
+			Preimages::<T>::insert(h, PreimageStatus::Available{data, provider, deposit, since, expiry: None});
+		}
 	}
 	// TODO: figure out actual weight
 	0
