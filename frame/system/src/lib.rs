@@ -581,7 +581,7 @@ decl_module! {
 			let mut runtime_upgraded_key = sp_io::hashing::twox_128(b"System").to_vec();
 			runtime_upgraded_key.extend(&sp_io::hashing::twox_128(b"RuntimeUpgraded"));
 			sp_io::storage::clear(&runtime_upgraded_key);
-			T::MaximumBlockWeight:get()
+			T::MaximumBlockWeight::get()
 		}
 
 		/// A dispatch that will fill the block weight up to the given ratio.

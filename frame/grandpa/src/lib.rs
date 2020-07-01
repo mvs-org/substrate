@@ -40,7 +40,7 @@ use fg_primitives::{
 	GRANDPA_ENGINE_ID,
 };
 use frame_support::{
-	decl_error, decl_event, decl_module, decl_storage, storage, traits::KeyOwnerProofSystem,
+	decl_error, decl_event, decl_module, decl_storage, storage, traits::{Get, KeyOwnerProofSystem},
 	Parameter, weights::Weight,
 };
 use frame_system::{self as system, ensure_signed, DigestOf};
