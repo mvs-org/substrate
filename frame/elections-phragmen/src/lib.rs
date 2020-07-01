@@ -669,10 +669,10 @@ decl_module! {
 			Self::end_block(n)
 		}
 
+		// The edgeware migration is so big we just assume it consumes the whole block.
 		fn on_runtime_upgrade() -> Weight {
 			migration::migrate::<T>();
-			// TODO: Find sensible weight
-			0
+			T::MaximumBlockWeight::get()
 		}
 	}
 }

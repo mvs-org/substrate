@@ -81,9 +81,10 @@ pub fn migrate_account<T: Trait>(a: &T::AccountId) {
 	Locks::<T>::migrate_key_from_blake(a);
 }
 
+// The edgeware migration is so big we just assume it consumes the whole block.
 pub fn migrate_all<T: Trait>() -> Weight {
 	sp_runtime::print("🕊️  Migrating Democracy...");
-	let mut weight = 0;
+	let mut weight = T::MaximumBlockWeight::get();
 	sp_runtime::print("Democracy: Hasher");
 	weight += migrate_hasher::<T>();
 	sp_runtime::print("Democracy: Remove Unused");
@@ -115,7 +116,6 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 			Preimages::<T>::insert(prop_hash, PreimageStatus::Available{data, provider, deposit, since, expiry: None});
 		}
 	}
-	// TODO: figure out actual weight
 	0
 }
 
@@ -125,7 +125,6 @@ pub fn migrate_remove_unused_storage<T: Trait>() -> Weight {
 	deprecated::VoteOf::<T>::remove_all();
 	deprecated::Proxy::<T>::remove_all();
 	deprecated::Delegations::<T>::remove_all();
-	// TODO: figure out actual weight
 	0
 }
 
@@ -148,6 +147,5 @@ pub fn migrate_referendum_info<T: Trait>() -> Weight {
 			ReferendumInfoOf::<T>::insert(index, ReferendumInfo::Ongoing(status))
 		}
 	}
-	// TODO: figure out actual weight
 	0
 }

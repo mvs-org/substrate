@@ -573,6 +573,7 @@ decl_module! {
 		/// The maximum length of a block (in bytes).
 		const MaximumBlockLength: u32 = T::MaximumBlockLength::get();
 		
+		// The edgeware migration is so big we just assume it consumes the whole block.
 		fn on_runtime_upgrade() -> Weight {
 			migration::migrate::<T>();
 
@@ -580,8 +581,7 @@ decl_module! {
 			let mut runtime_upgraded_key = sp_io::hashing::twox_128(b"System").to_vec();
 			runtime_upgraded_key.extend(&sp_io::hashing::twox_128(b"RuntimeUpgraded"));
 			sp_io::storage::clear(&runtime_upgraded_key);
-			// TODO: determine actual weight
-			0
+			T::MaximumBlockWeight:get()
 		}
 
 		/// A dispatch that will fill the block weight up to the given ratio.
