@@ -111,7 +111,6 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 			DepositOf::<T>::insert(prop_idx, (depositors, deposit));
 		}
 		// necessary because of [scheduler PR](https://github.com/paritytech/substrate/pull/5412)
-		frame_support::runtime_print!("Preimages key: {:?}", deprecated::Preimages::<T>::hashed_key_for(prop_hash));
 		if let Some((data, provider, deposit, since)) = deprecated::Preimages::<T>::take(prop_hash) {
 			Preimages::<T>::insert(prop_hash, PreimageStatus::Available{data, provider, deposit, since, expiry: None});
 		}

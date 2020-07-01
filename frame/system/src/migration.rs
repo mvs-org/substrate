@@ -20,7 +20,6 @@ pub fn migrate_block_hash<T: Trait>() -> Weight {
 		let mut n = block_num - One::one() - One::one();
 		let mut migrations = 1;
 		while !n.is_zero() {
-			sp_runtime::print(n.saturated_into::<u32>());
 			migrations += 1;
 			if BlockHash::<T>::migrate_key_from_blake(n).is_none() {
 				break;
