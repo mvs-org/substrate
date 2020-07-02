@@ -245,13 +245,6 @@ decl_module! {
 			T::MaximumBlockWeight::get()
 		}
 
-		fn on_initialize() -> Weight {
-			#[cfg(feature = "migrate-authorities")]
-			Self::migrate_authorities();
-			// TODO: determine actual weight
-			0
-		}
-
 		/// Report voter equivocation/misbehavior. This method will verify the
 		/// equivocation proof and validate the given key ownership proof
 		/// against the extracted offender. If both are valid, the offence
