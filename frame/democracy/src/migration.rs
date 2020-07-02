@@ -96,7 +96,7 @@ pub fn migrate_all<T: Trait>() -> Weight {
 }
 
 pub fn migrate_hasher<T: Trait>() -> Weight {
-	// TODO: is this valid?
+	// Edgeware does not have any blacklist/cancellations that need to be migrated --> remove
 	Blacklist::<T>::remove_all();
 	Cancellations::<T>::remove_all();
 	// Note this only migrates the hasher, `ReferendumInfoOf` is fully migrated in
@@ -120,7 +120,8 @@ pub fn migrate_hasher<T: Trait>() -> Weight {
 }
 
 pub fn migrate_remove_unused_storage<T: Trait>() -> Weight {
-	// TODO: is this valid?
+	// It's unlikely that Edgeware will have open proposals during the migration so we can assume
+	// this to be fine.
 	deprecated::VotersFor::<T>::remove_all();
 	deprecated::VoteOf::<T>::remove_all();
 	deprecated::Proxy::<T>::remove_all();
