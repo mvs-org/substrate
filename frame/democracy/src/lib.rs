@@ -609,10 +609,10 @@ decl_module! {
 
 		fn deposit_event() = default;
 
-		fn on_runtime_upgrade() -> Weight {
+		// fn on_runtime_upgrade() -> Weight {
 			// moved into separate crate
 			// migration::migrate_all::<T>()
-		}
+		// }
 
 		/// Propose a sensitive action to be taken.
 		///
