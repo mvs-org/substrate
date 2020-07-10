@@ -52,3 +52,35 @@ pub fn migrate_enum_set<T: Trait>() -> Weight {
         0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use remote_externalities::Builder;
+    use edgeware_runtime::Runtime;
+
+    #[test]
+    fn test_runtime_works() {
+        let hash: Hash =
+            hex!["276cd73ecaa70de23382ef0d874960d29a10052d2e7c09f452a45b688774deed"].into();
+        let parent: Hash =
+            hex!["6d61d36a35a052380114b3d2f9dab416a251b0bc631fec88157931431deee8a4"].into();
+        Builder::new()
+            .at(hash)
+            .uri(String::from("wss://mainnet1.edgewa.re"))
+            .module("System")
+            .build()
+            .execute_with(|| {
+                assert_eq!(
+                    // note: the hash corresponds to 10. We can check only the parent.
+                    // https://edgeware.subscan.io/block/10
+                    <frame_system::Module<Runtime>>::block_hash(10u64),
+                    parent,
+                )
+            });
+    }
+
+    #[test]
+    fn indices_migration_works() {
+        // TODO
+    }
+}
