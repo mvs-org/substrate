@@ -24,18 +24,11 @@ use sp_runtime::FixedI64;
 type OldMultiplier = FixedI64;
 
 pub fn on_runtime_upgrade<T: Trait>() -> Weight {
-	rename_and_convert::<T>()
+	reset_next_fee_multiplier::<T>()
 }
 
-// Change the storage name used by this pallet from `Balances` to `TransactionPayment`.
-//
-// Since the format of the storage items themselves have not changed, we do not
-// need to keep track of a storage version. If the runtime does not need to be
-// upgraded, nothing here will happen anyway.
-//
-// TODO: Also the type of the multiplier has changed in the mean-time we might want to 
-// introduce a storage version?
-fn rename_and_convert<T: Trait>() -> Weight {
+// Remove the old multiplier under the "Balances" prefix and set the new value to default.
+fn reset_next_fee_multiplier<T: Trait>() -> Weight {
 	sp_runtime::print("🕊️  Migrating Transaction Payment.");
 
 	// remove the old storage value
