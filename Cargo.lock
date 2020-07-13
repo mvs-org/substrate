@@ -5111,10 +5111,13 @@ dependencies = [
 name = "pallet-indices"
 version = "2.0.0-rc3"
 dependencies = [
+ "edgeware-primitives",
  "edgeware-runtime",
  "frame-benchmarking",
  "frame-support 2.0.0-rc3",
+ "frame-system 2.0.0",
  "frame-system 2.0.0-rc3",
+ "hex-literal",
  "pallet-balances 2.0.0-rc3",
  "parity-scale-codec",
  "remote-externalities",

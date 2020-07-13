@@ -1,6 +1,7 @@
 use super::*;
 use frame_support::weights::Weight;
 use sp_runtime::traits::One;
+type Hash = sp_core::H256;
 
 mod deprecated {
     use crate::Trait;
@@ -11,7 +12,7 @@ mod deprecated {
         trait Store for Module<T: Trait> as Indices {
             /// The next free enumeration set.
             pub NextEnumSet get(fn next_enum_set): T::AccountIndex;
-    
+
             /// The enumeration sets.
             pub EnumSet get(fn enum_set): map hasher(opaque_blake2_256) T::AccountIndex => Vec<T::AccountId>;
         }
@@ -36,7 +37,9 @@ pub fn migrate_enum_set<T: Trait>() -> Weight {
             }
             let accounts = deprecated::EnumSet::<T>::take(&set_index);
             for (item_index, target) in accounts.into_iter().enumerate() {
-                if target != T::AccountId::default() && !T::Currency::total_balance(&target).is_zero() {
+                if target != T::AccountId::default()
+                    && !T::Currency::total_balance(&target).is_zero()
+                {
                     let index = set_index * set_size + T::AccountIndex::from(item_index as u32);
                     // We need to add `false` to indicate the index is not frozen.
                     // See the [frozen indices PR](https://github.com/paritytech/substrate/pull/6307/)
@@ -55,8 +58,11 @@ pub fn migrate_enum_set<T: Trait>() -> Weight {
 
 #[cfg(test)]
 mod tests {
-    use remote_externalities::Builder;
     use edgeware_runtime::Runtime;
+    use hex_literal::hex;
+    use remote_externalities::Builder;
+
+    pub type Hash = sp_core::H256;
 
     #[test]
     fn test_runtime_works() {
@@ -66,14 +72,14 @@ mod tests {
             hex!["6d61d36a35a052380114b3d2f9dab416a251b0bc631fec88157931431deee8a4"].into();
         Builder::new()
             .at(hash)
-            .uri(String::from("wss://mainnet1.edgewa.re"))
+            .uri(String::from("ws://mainnet1.edgewa.re:9944"))
             .module("System")
             .build()
             .execute_with(|| {
                 assert_eq!(
                     // note: the hash corresponds to 10. We can check only the parent.
                     // https://edgeware.subscan.io/block/10
-                    <frame_system::Module<Runtime>>::block_hash(10u64),
+                    <old_system::Module<Runtime>>::block_hash(10u64.into()),
                     parent,
                 )
             });
