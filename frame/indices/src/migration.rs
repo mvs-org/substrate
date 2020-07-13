@@ -1,7 +1,6 @@
 use super::*;
 use frame_support::weights::Weight;
 use sp_runtime::traits::One;
-type Hash = sp_core::H256;
 
 mod deprecated {
     use crate::Trait;
@@ -58,18 +57,19 @@ pub fn migrate_enum_set<T: Trait>() -> Weight {
 
 #[cfg(test)]
 mod tests {
+    use edgeware_primitives::Hash;
     use edgeware_runtime::Runtime;
     use hex_literal::hex;
     use remote_externalities::Builder;
 
-    pub type Hash = sp_core::H256;
-
     #[test]
     fn test_runtime_works() {
-        let hash: Hash =
+        let hash: sp_core::H256 =
             hex!["276cd73ecaa70de23382ef0d874960d29a10052d2e7c09f452a45b688774deed"].into();
-        let parent: Hash =
+        let parent: sp_core::H256 =
             hex!["6d61d36a35a052380114b3d2f9dab416a251b0bc631fec88157931431deee8a4"].into();
+
+        let expected: Hash = <old_system::Module<Runtime>>::block_hash(10u32);
         Builder::new()
             .at(hash)
             .uri(String::from("ws://mainnet1.edgewa.re:9944"))
@@ -79,8 +79,8 @@ mod tests {
                 assert_eq!(
                     // note: the hash corresponds to 10. We can check only the parent.
                     // https://edgeware.subscan.io/block/10
-                    <old_system::Module<Runtime>>::block_hash(10u64.into()),
-                    parent,
+                    expected.as_bytes(),
+                    parent.as_bytes(),
                 )
             });
     }
