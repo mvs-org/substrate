@@ -69,13 +69,13 @@ mod tests {
         let parent: sp_core::H256 =
             hex!["6d61d36a35a052380114b3d2f9dab416a251b0bc631fec88157931431deee8a4"].into();
 
-        let expected: Hash = <old_system::Module<Runtime>>::block_hash(10u32);
         Builder::new()
             .at(hash)
             .uri(String::from("ws://mainnet1.edgewa.re:9944"))
             .module("System")
             .build()
             .execute_with(|| {
+                let expected: Hash = <old_system::Module<Runtime>>::block_hash(10u32);
                 assert_eq!(
                     // note: the hash corresponds to 10. We can check only the parent.
                     // https://edgeware.subscan.io/block/10
