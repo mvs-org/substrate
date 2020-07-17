@@ -2220,6 +2220,7 @@ decl_module! {
 
 impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
 	fn migrate_account(a: &T::AccountId) {
+		frame_support::runtime_print!("🕊️  Migrating Staking Account '{:#?}'", a);
 		if let Some(controller) = Bonded::<T>::migrate_key_from_blake(a) {
 			Ledger::<T>::migrate_key_from_blake(controller);
 			Payee::<T>::migrate_key_from_blake(a);

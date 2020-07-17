@@ -20,19 +20,19 @@ mod deprecated {
 const DEDUP_KEY_PREFIX: &[u8] = b":session:keys";
 
 pub fn migrate_account<T: Trait>(a: &T::AccountId) {
-    frame_support::runtime_print!("🕊️  Migrating Session Account '{:?}'", a);
+    frame_support::runtime_print!("🕊️  Migrating Session Account '{:#?}'", a);
     if let Some(v) = T::ValidatorIdOf::convert(a.clone()) {
-        frame_support::runtime_print!("Validator Id '{:?}'", v);
+        frame_support::runtime_print!("Validator Id '{:#?}'", v);
         if let Some(keys) = deprecated::NextKeys::<T>::take(DEDUP_KEY_PREFIX, &v) {
-            frame_support::runtime_print!("Keys '{:?}'", keys);
+            frame_support::runtime_print!("Keys '{:#?}'", keys);
             NextKeys::<T>::insert(&v, &keys);
             for id in T::Keys::key_ids() {
                 if let Some(owner) = deprecated::KeyOwner::<T>::take(DEDUP_KEY_PREFIX, (*id, keys.get_raw(*id))) {
-                    frame_support::runtime_print!("Owner '{:?}'", owner);
+                    frame_support::runtime_print!("Owner '{:#?}'", owner);
                     KeyOwner::<T>::insert((*id, keys.get_raw(*id)), owner);
                 }
             }
         }
     }
-    frame_support::runtime_print!("🕊️  Done Session Account '{:?}'", a);
+    frame_support::runtime_print!("🕊️  Done Session Account '{:#?}'", a);
 }
