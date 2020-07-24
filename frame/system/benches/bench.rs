@@ -86,6 +86,7 @@ impl system::Trait for Runtime {
 	type MigrateAccount = ();
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
+	type SystemWeightInfo = ();
 }
 
 impl module::Trait for Runtime {

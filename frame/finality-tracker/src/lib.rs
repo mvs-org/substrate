@@ -215,8 +215,9 @@ mod tests {
 	use sp_io::TestExternalities;
 	use sp_core::H256;
 	use sp_runtime::{
-		testing::Header, Perbill,
-		traits::{BlakeTwo256, IdentityLookup, Header as HeaderT},
+		testing::Header,
+		traits::{BlakeTwo256, IdentityLookup},
+		Perbill,
 	};
 	use frame_support::{
 		assert_ok, impl_outer_origin, parameter_types,
@@ -236,7 +237,7 @@ mod tests {
 	pub struct Test;
 
 	impl_outer_origin! {
-		pub enum Origin for Test  where system = frame_system {}
+		pub enum Origin for Test where system = frame_system {}
 	}
 
 	thread_local! {
@@ -283,6 +284,7 @@ mod tests {
 		type MigrateAccount = ();
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
+		type SystemWeightInfo = ();
 	}
 	parameter_types! {
 		pub const WindowSize: u64 = 11;

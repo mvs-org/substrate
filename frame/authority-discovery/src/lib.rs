@@ -123,6 +123,7 @@ mod tests {
 		type ValidatorIdOf = ConvertInto;
 		type DisabledValidatorsThreshold = DisabledValidatorsThreshold;
 		type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
+		type WeightInfo = ();
 	}
 
 	impl pallet_session::historical::Trait for Test {
@@ -168,10 +169,11 @@ mod tests {
 		type MigrateAccount = ();
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
+		type SystemWeightInfo = ();
 	}
 
 	impl_outer_origin! {
-		pub enum Origin for Test  where system = frame_system {}
+		pub enum Origin for Test where system = frame_system {}
 	}
 
 	pub struct TestSessionHandler;

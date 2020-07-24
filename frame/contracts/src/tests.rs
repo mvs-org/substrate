@@ -17,6 +17,7 @@
 use crate::{
 	BalanceOf, ContractAddressFor, ContractInfo, ContractInfoOf, GenesisConfig, Module,
 	RawAliveContractInfo, RawEvent, Trait, TrieId, Schedule, TrieIdGenerator, gas::Gas,
+	Error,
 };
 use assert_matches::assert_matches;
 use hex_literal::*;
@@ -30,7 +31,7 @@ use frame_support::{
 	assert_ok, assert_err_ignore_postinfo, impl_outer_dispatch, impl_outer_event,
 	impl_outer_origin, parameter_types, StorageMap, StorageValue,
 	traits::{Currency, Get},
-	weights::{Weight, PostDispatchInfo, IdentityFee},
+	weights::{Weight, PostDispatchInfo},
 };
 use std::cell::RefCell;
 use frame_system::{self as system, EventRecord, Phase};
@@ -53,7 +54,7 @@ impl_outer_event! {
 	}
 }
 impl_outer_origin! {
-	pub enum Origin for Test  where system = frame_system { }
+	pub enum Origin for Test where system = frame_system { }
 }
 impl_outer_dispatch! {
 	pub enum Call for Test where origin: Origin {
@@ -133,6 +134,7 @@ impl frame_system::Trait for Test {
 	type MigrateAccount = ();
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
+	type SystemWeightInfo = ();
 }
 impl pallet_balances::Trait for Test {
 	type Balance = u64;
@@ -140,6 +142,7 @@ impl pallet_balances::Trait for Test {
 	type DustRemoval = ();
 	type ExistentialDeposit = ExistentialDeposit;
 	type AccountStore = System;
+	type WeightInfo = ();
 }
 parameter_types! {
 	pub const MinimumPeriod: u64 = 1;
@@ -148,6 +151,7 @@ impl pallet_timestamp::Trait for Test {
 	type Moment = u64;
 	type OnTimestampSet = ();
 	type MinimumPeriod = MinimumPeriod;
+	type WeightInfo = ();
 }
 parameter_types! {
 	pub const SignedClaimHandicap: u64 = 2;
@@ -170,18 +174,10 @@ impl Convert<Weight, BalanceOf<Self>> for Test {
 	}
 }
 
-impl pallet_transaction_payment::Trait for Test {
-	type Currency = Balances;
-	type OnTransactionPayment = ();
-	type TransactionByteFee = TransactionByteFee;
-	type WeightToFee = IdentityFee<BalanceOf<Self>>;
-	type FeeMultiplierUpdate = ();
-}
-
 impl Trait for Test {
 	type Time = Timestamp;
 	type Randomness = Randomness;
-	type Call = Call;
+	type Currency = Balances;
 	type DetermineContractAddress = DummyContractAddressFor;
 	type Event = MetaEvent;
 	type TrieIdGenerator = DummyTrieIdGenerator;
@@ -194,6 +190,7 @@ impl Trait for Test {
 	type SurchargeReward = SurchargeReward;
 	type MaxDepth = MaxDepth;
 	type MaxValueSize = MaxValueSize;
+	type WeightPrice = Self;
 }
 
 type Balances = pallet_balances::Module<Test>;
@@ -454,233 +451,6 @@ fn instantiate_and_call_and_deposit_event() {
 }
 
 #[test]
-fn dispatch_call() {
-	// This test can fail due to the encoding changes. In case it becomes too annoying
-	// let's rewrite so as we use this module controlled call or we serialize it in runtime.
-	let encoded = Encode::encode(&Call::Balances(pallet_balances::Call::transfer(CHARLIE, 50)));
-	assert_eq!(&encoded[..], &hex!("00000300000000000000C8")[..]);
-
-	let (wasm, code_hash) = compile_module::<Test>("dispatch_call").unwrap();
-
-	ExtBuilder::default()
-		.existential_deposit(50)
-		.build()
-		.execute_with(|| {
-			let _ = Balances::deposit_creating(&ALICE, 1_000_000);
-
-			assert_ok!(Contracts::put_code(Origin::signed(ALICE), wasm));
-
-			// Let's keep this assert even though it's redundant. If you ever need to update the
-			// wasm source this test will fail and will show you the actual hash.
-			assert_eq!(System::events(), vec![
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::system(frame_system::RawEvent::NewAccount(1)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(pallet_balances::RawEvent::Endowed(1, 1_000_000)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::contracts(RawEvent::CodeStored(code_hash.into())),
-					topics: vec![],
-				},
-			]);
-
-			assert_ok!(Contracts::instantiate(
-				Origin::signed(ALICE),
-				100,
-				GAS_LIMIT,
-				code_hash.into(),
-				vec![],
-			));
-
-			assert_ok!(Contracts::call(
-				Origin::signed(ALICE),
-				BOB, // newly created account
-				0,
-				GAS_LIMIT,
-				vec![],
-			));
-
-			pretty_assertions::assert_eq!(System::events(), vec![
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::system(frame_system::RawEvent::NewAccount(1)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(pallet_balances::RawEvent::Endowed(1, 1_000_000)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::contracts(RawEvent::CodeStored(code_hash.into())),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::system(frame_system::RawEvent::NewAccount(BOB)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(
-						pallet_balances::RawEvent::Endowed(BOB, 100)
-					),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(
-						pallet_balances::RawEvent::Transfer(ALICE, BOB, 100)
-					),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::contracts(RawEvent::Instantiated(ALICE, BOB)),
-					topics: vec![],
-				},
-
-				// Dispatching the call.
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::system(frame_system::RawEvent::NewAccount(CHARLIE)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(
-						pallet_balances::RawEvent::Endowed(CHARLIE, 50)
-					),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(
-						pallet_balances::RawEvent::Transfer(BOB, CHARLIE, 50)
-					),
-					topics: vec![],
-				},
-
-				// Event emitted as a result of dispatch.
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::contracts(RawEvent::Dispatched(BOB, true)),
-					topics: vec![],
-				}
-			]);
-		});
-}
-
-#[test]
-fn dispatch_call_not_dispatched_after_top_level_transaction_failure() {
-	// This test can fail due to the encoding changes. In case it becomes too annoying
-	// let's rewrite so as we use this module controlled call or we serialize it in runtime.
-	let encoded = Encode::encode(&Call::Balances(pallet_balances::Call::transfer(CHARLIE, 50)));
-	assert_eq!(&encoded[..], &hex!("00000300000000000000C8")[..]);
-
-	let (wasm, code_hash) = compile_module::<Test>("dispatch_call_then_trap").unwrap();
-
-	ExtBuilder::default()
-		.existential_deposit(50)
-		.build()
-		.execute_with(|| {
-			let _ = Balances::deposit_creating(&ALICE, 1_000_000);
-
-			assert_ok!(Contracts::put_code(Origin::signed(ALICE), wasm));
-
-			// Let's keep this assert even though it's redundant. If you ever need to update the
-			// wasm source this test will fail and will show you the actual hash.
-			assert_eq!(System::events(), vec![
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::system(frame_system::RawEvent::NewAccount(1)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(pallet_balances::RawEvent::Endowed(1, 1_000_000)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::contracts(RawEvent::CodeStored(code_hash.into())),
-					topics: vec![],
-				},
-			]);
-
-			assert_ok!(Contracts::instantiate(
-				Origin::signed(ALICE),
-				100,
-				GAS_LIMIT,
-				code_hash.into(),
-				vec![],
-			));
-
-			// Call the newly instantiated contract. The contract is expected to dispatch a call
-			// and then trap.
-			assert_err_ignore_postinfo!(
-				Contracts::call(
-					Origin::signed(ALICE),
-					BOB, // newly created account
-					0,
-					GAS_LIMIT,
-					vec![],
-				),
-				"contract trapped during execution"
-			);
-			pretty_assertions::assert_eq!(System::events(), vec![
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::system(frame_system::RawEvent::NewAccount(1)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(pallet_balances::RawEvent::Endowed(1, 1_000_000)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::contracts(RawEvent::CodeStored(code_hash.into())),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::system(frame_system::RawEvent::NewAccount(BOB)),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(
-						pallet_balances::RawEvent::Endowed(BOB, 100)
-					),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::balances(
-						pallet_balances::RawEvent::Transfer(ALICE, BOB, 100)
-					),
-					topics: vec![],
-				},
-				EventRecord {
-					phase: Phase::Initialization,
-					event: MetaEvent::contracts(RawEvent::Instantiated(ALICE, BOB)),
-					topics: vec![],
-				},
-				// ABSENCE of events which would be caused by dispatched Balances::transfer call
-			]);
-		});
-}
-
-#[test]
 fn run_out_of_gas() {
 	let (wasm, code_hash) = compile_module::<Test>("run_out_of_gas").unwrap();
 
@@ -710,7 +480,7 @@ fn run_out_of_gas() {
 					67_500_000,
 					vec![],
 				),
-				"ran out of gas during contract execution"
+				Error::<Test>::OutOfGas,
 			);
 		});
 }
@@ -1028,6 +798,7 @@ fn claim_surcharge(blocks: u64, trigger_call: impl Fn() -> bool, removes: bool) 
 /// * if balance is reached and balance > subsistence threshold
 /// * if allowance is exceeded
 /// * if balance is reached and balance < subsistence threshold
+///	    * this case cannot be triggered by a contract: we check whether a tombstone is left
 fn removals(trigger_call: impl Fn() -> bool) {
 	let (wasm, code_hash) = compile_module::<Test>("set_rent").unwrap();
 
@@ -1129,10 +900,12 @@ fn removals(trigger_call: impl Fn() -> bool) {
 		.execute_with(|| {
 			// Create
 			let _ = Balances::deposit_creating(&ALICE, 1_000_000);
+			let subsistence_threshold =
+				Balances::minimum_balance() + <Test as Trait>::TombstoneDeposit::get();
 			assert_ok!(Contracts::put_code(Origin::signed(ALICE), wasm.clone()));
 			assert_ok!(Contracts::instantiate(
 				Origin::signed(ALICE),
-				50 + Balances::minimum_balance(),
+				50 + subsistence_threshold,
 				GAS_LIMIT,
 				code_hash.into(),
 				<Test as pallet_balances::Trait>::Balance::from(1_000u32).encode() // rent allowance
@@ -1150,7 +923,7 @@ fn removals(trigger_call: impl Fn() -> bool) {
 			);
 			assert_eq!(
 				Balances::free_balance(BOB),
-				50 + Balances::minimum_balance()
+				50 + subsistence_threshold,
 			);
 
 			// Transfer funds
@@ -1169,23 +942,23 @@ fn removals(trigger_call: impl Fn() -> bool) {
 					.rent_allowance,
 				1_000
 			);
-			assert_eq!(Balances::free_balance(BOB), Balances::minimum_balance());
+			assert_eq!(Balances::free_balance(BOB), subsistence_threshold);
 
 			// Advance blocks
 			initialize_block(10);
 
 			// Trigger rent through call
 			assert!(trigger_call());
-			assert!(ContractInfoOf::<Test>::get(BOB).is_none());
-			assert_eq!(Balances::free_balance(BOB), Balances::minimum_balance());
+			assert_matches!(ContractInfoOf::<Test>::get(BOB), Some(ContractInfo::Tombstone(_)));
+			assert_eq!(Balances::free_balance(BOB), subsistence_threshold);
 
 			// Advance blocks
 			initialize_block(20);
 
 			// Trigger rent must have no effect
 			assert!(trigger_call());
-			assert!(ContractInfoOf::<Test>::get(BOB).is_none());
-			assert_eq!(Balances::free_balance(BOB), Balances::minimum_balance());
+			assert_matches!(ContractInfoOf::<Test>::get(BOB), Some(ContractInfo::Tombstone(_)));
+			assert_eq!(Balances::free_balance(BOB), subsistence_threshold);
 		});
 }
 
@@ -1401,7 +1174,7 @@ fn restoration(test_different_storage: bool, test_restore_to_with_dirty_storage:
 					DJANGO,
 					0,
 					GAS_LIMIT,
-					vec![],
+					set_rent_code_hash.as_ref().to_vec(),
 				)
 			};
 
@@ -1526,7 +1299,7 @@ fn storage_max_value_limit() {
 				Origin::signed(ALICE),
 				BOB,
 				0,
-				GAS_LIMIT,
+				GAS_LIMIT * 2, // we are copying a huge buffer
 				Encode::encode(&self::MaxValueSize::get()),
 			));
 
@@ -1781,38 +1554,6 @@ fn cannot_self_destruct_in_constructor() {
 }
 
 #[test]
-fn get_runtime_storage() {
-	let (wasm, code_hash) = compile_module::<Test>("get_runtime_storage").unwrap();
-	ExtBuilder::default()
-		.existential_deposit(50)
-		.build()
-		.execute_with(|| {
-			let _ = Balances::deposit_creating(&ALICE, 1_000_000);
-
-			frame_support::storage::unhashed::put_raw(
-				&[1, 2, 3, 4],
-				0x14144020u32.to_le_bytes().to_vec().as_ref()
-			);
-
-			assert_ok!(Contracts::put_code(Origin::signed(ALICE), wasm));
-			assert_ok!(Contracts::instantiate(
-				Origin::signed(ALICE),
-				100,
-				GAS_LIMIT,
-				code_hash.into(),
-				vec![],
-			));
-			assert_ok!(Contracts::call(
-				Origin::signed(ALICE),
-				BOB,
-				0,
-				GAS_LIMIT,
-				vec![],
-			));
-		});
-}
-
-#[test]
 fn crypto_hashes() {
 	let (wasm, code_hash) = compile_module::<Test>("crypto_hashes").unwrap();
 
@@ -1858,8 +1599,8 @@ fn crypto_hashes() {
 					0,
 					GAS_LIMIT,
 					params,
-				).unwrap();
-				assert_eq!(result.status, 0);
+				).0.unwrap();
+				assert!(result.is_success());
 				let expected = hash_fn(input.as_ref());
 				assert_eq!(&result.data[..*expected_size], &*expected);
 			}

@@ -85,6 +85,7 @@ impl frame_system::Trait for Test {
 	type MigrateAccount = ();
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
+	type SystemWeightInfo = ();
 }
 parameter_types! {
 	pub const ExistentialDeposit: u64 = 1;
@@ -95,6 +96,7 @@ impl pallet_balances::Trait for Test {
 	type DustRemoval = ();
 	type ExistentialDeposit = ExistentialDeposit;
 	type AccountStore = System;
+	type WeightInfo = ();
 }
 parameter_types! {
 	pub const DepositBase: u64 = 1;
@@ -119,6 +121,7 @@ impl Trait for Test {
 	type DepositBase = DepositBase;
 	type DepositFactor = DepositFactor;
 	type MaxSignatories = MaxSignatories;
+	type WeightInfo = ();
 }
 type System = frame_system::Module<Test>;
 type Balances = pallet_balances::Module<Test>;

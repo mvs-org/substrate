@@ -30,7 +30,7 @@ type AccountIndex = u32;
 type BlockNumber = u64;
 
 impl_outer_origin! {
-	pub enum Origin for Test  where system = frame_system {}
+	pub enum Origin for Test where system = frame_system {}
 }
 
 #[derive(Debug, codec::Encode, codec::Decode)]
@@ -76,6 +76,7 @@ impl frame_system::Trait for Test {
 	type MigrateAccount = ();
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
+	type SystemWeightInfo = ();
 }
 
 impl crate::Trait for Test {}

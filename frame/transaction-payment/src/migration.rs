@@ -24,7 +24,7 @@ use sp_runtime::FixedI64;
 type OldMultiplier = FixedI64;
 
 pub fn on_runtime_upgrade<T: Trait>() -> Weight {
-	rename_and_convert::<T>()
+    rename_and_convert::<T>()
 }
 
 // Change the storage name used by this pallet from `Balances` to `TransactionPayment`.
@@ -33,19 +33,19 @@ pub fn on_runtime_upgrade<T: Trait>() -> Weight {
 // need to keep track of a storage version. If the runtime does not need to be
 // upgraded, nothing here will happen anyway.
 //
-// TODO: Also the type of the multiplier has changed in the mean-time we might want to 
+// TODO: Also the type of the multiplier has changed in the mean-time we might want to
 // introduce a storage version?
 fn rename_and_convert<T: Trait>() -> Weight {
-	sp_runtime::print("🕊️  Migrating Transaction Payment.");
+    sp_runtime::print("🕊️  Migrating Transaction Payment.");
 
-	// remove the old storage value
-	take_storage_value::<OldMultiplier>(b"Balances", b"NextFeeMultiplier", &[]);
-	// and replace with the default initialization
-	NextFeeMultiplier::put(Multiplier::saturating_from_integer(1));
+    // remove the old storage value
+    take_storage_value::<OldMultiplier>(b"Balances", b"NextFeeMultiplier", &[]);
+    // and replace with the default initialization
+    NextFeeMultiplier::put(Multiplier::saturating_from_integer(1));
 
-	// put on record that we migrated to most recent version
-	StorageVersion::put(Releases::V2);
+    // put on record that we migrated to most recent version
+    StorageVersion::put(Releases::V2);
 
-	sp_runtime::print("🕊️  Done Transaction Payment.");
-	T::DbWeight::get().reads_writes(1, 2)
+    sp_runtime::print("🕊️  Done Transaction Payment.");
+    T::DbWeight::get().reads_writes(1, 2)
 }

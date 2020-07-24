@@ -21,7 +21,7 @@ use frame_support::storage::migration::{put_storage_value, take_storage_value, S
 use frame_support::weights::Weight;
 
 pub fn on_runtime_upgrade<T: Trait>() -> Weight {
-	change_name_sudo_to_identity::<T>()
+    change_name_sudo_to_identity::<T>()
 }
 
 // Change the storage name used by this pallet from `Sudo` to `Identity`.
@@ -31,31 +31,40 @@ pub fn on_runtime_upgrade<T: Trait>() -> Weight {
 // upgraded, nothing here will happen anyway.
 
 fn change_name_sudo_to_identity<T: Trait>() -> Weight {
-	sp_runtime::print("🕊️  Migrating Identity.");
+    sp_runtime::print("🕊️  Migrating Identity.");
 
-	let mut weight = 0;
-	let db = T::DbWeight::get();
-	for (hash, identity_of) in StorageIterator::<Registration<BalanceOf<T>>>::new(b"Sudo", b"IdentityOf").drain() {
-		put_storage_value(b"Identity", b"IdentityOf", &hash, identity_of);
-		weight += db.reads_writes(1, 2);
-	}
+    let mut weight = 0;
+    let db = T::DbWeight::get();
+    for (hash, identity_of) in
+        StorageIterator::<Registration<BalanceOf<T>>>::new(b"Sudo", b"IdentityOf").drain()
+    {
+        put_storage_value(b"Identity", b"IdentityOf", &hash, identity_of);
+        weight += db.reads_writes(1, 2);
+    }
 
-	for (hash, super_of) in StorageIterator::<(T::AccountId, Data)>::new(b"Sudo", b"SuperOf").drain() {
-		put_storage_value(b"Identity", b"SuperOf", &hash, super_of);
-		weight += db.reads_writes(1, 2);
-	}
+    for (hash, super_of) in
+        StorageIterator::<(T::AccountId, Data)>::new(b"Sudo", b"SuperOf").drain()
+    {
+        put_storage_value(b"Identity", b"SuperOf", &hash, super_of);
+        weight += db.reads_writes(1, 2);
+    }
 
-	for (hash, subs_of) in StorageIterator::<(BalanceOf<T>, Vec<T::AccountId>)>::new(b"Sudo", b"SubsOf").drain() {
-		put_storage_value(b"Identity", b"SubsOf", &hash, subs_of);
-		weight += db.reads_writes(1, 2);
-	}
+    for (hash, subs_of) in
+        StorageIterator::<(BalanceOf<T>, Vec<T::AccountId>)>::new(b"Sudo", b"SubsOf").drain()
+    {
+        put_storage_value(b"Identity", b"SubsOf", &hash, subs_of);
+        weight += db.reads_writes(1, 2);
+    }
 
-	if let Some(registrars) = take_storage_value::<Vec<Option<RegistrarInfo<BalanceOf<T>, T::AccountId>>>>(b"Sudo", b"Registrars", &[]) {
-		put_storage_value(b"Identity", b"Registrars", &[], registrars);
-		weight += db.writes(2);
-	}
-	weight += db.reads(1);
+    if let Some(registrars) = take_storage_value::<
+        Vec<Option<RegistrarInfo<BalanceOf<T>, T::AccountId>>>,
+    >(b"Sudo", b"Registrars", &[])
+    {
+        put_storage_value(b"Identity", b"Registrars", &[], registrars);
+        weight += db.writes(2);
+    }
+    weight += db.reads(1);
 
-	sp_runtime::print("🕊️  Done Identity.");
-	weight
+    sp_runtime::print("🕊️  Done Identity.");
+    weight
 }
