@@ -17,19 +17,21 @@
 
 //! Helpers for offchain worker election.
 
-use codec::Decode;
 use crate::{
-	Call, CompactAssignments, Module, NominatorIndex, OffchainAccuracy, Trait, ValidatorIndex,
-	ElectionSize,
+	Call, CompactAssignments, ElectionSize, Module, NominatorIndex, OffchainAccuracy, Trait, ValidatorIndex,
 };
+use codec::Decode;
+use frame_support::traits::Get;
 use frame_system::offchain::SubmitTransaction;
 use sp_npos_elections::{
-	build_support_map, evaluate_support, reduce, Assignment, ExtendedBalance, ElectionResult,
-	ElectionScore, balance_solution,
+	balance_solution, build_support_map, evaluate_support, reduce, Assignment, ElectionResult, ElectionScore,
+	ExtendedBalance,
 };
 use sp_runtime::offchain::storage::StorageValueRef;
-use sp_runtime::{PerThing, RuntimeDebug, traits::{TrailingZeroInput, Zero}};
-use frame_support::traits::Get;
+use sp_runtime::{
+	traits::{TrailingZeroInput, Zero},
+	PerThing, RuntimeDebug,
+};
 use sp_std::{convert::TryInto, prelude::*};
 
 /// Error types related to the offchain election machinery.
@@ -68,29 +70,24 @@ pub(crate) const DEFAULT_LONGEVITY: u64 = 25;
 /// don't run twice within a window of length [`OFFCHAIN_REPEAT`].
 ///
 /// Returns `Ok(())` if offchain worker should happen, `Err(reason)` otherwise.
-pub(crate) fn set_check_offchain_execution_status<T: Trait>(
-	now: T::BlockNumber,
-) -> Result<(), &'static str> {
+pub(crate) fn set_check_offchain_execution_status<T: Trait>(now: T::BlockNumber) -> Result<(), &'static str> {
 	let storage = StorageValueRef::persistent(&OFFCHAIN_HEAD_DB);
 	let threshold = T::BlockNumber::from(OFFCHAIN_REPEAT);
 
-	let mutate_stat =
-		storage.mutate::<_, &'static str, _>(|maybe_head: Option<Option<T::BlockNumber>>| {
-			match maybe_head {
-				Some(Some(head)) if now < head => Err("fork."),
-				Some(Some(head)) if now >= head && now <= head + threshold => {
-					Err("recently executed.")
-				}
-				Some(Some(head)) if now > head + threshold => {
-					// we can run again now. Write the new head.
-					Ok(now)
-				}
-				_ => {
-					// value doesn't exists. Probably this node just booted up. Write, and run
-					Ok(now)
-				}
+	let mutate_stat = storage.mutate::<_, &'static str, _>(|maybe_head: Option<Option<T::BlockNumber>>| {
+		match maybe_head {
+			Some(Some(head)) if now < head => Err("fork."),
+			Some(Some(head)) if now >= head && now <= head + threshold => Err("recently executed."),
+			Some(Some(head)) if now > head + threshold => {
+				// we can run again now. Write the new head.
+				Ok(now)
 			}
-		});
+			_ => {
+				// value doesn't exists. Probably this node just booted up. Write, and run
+				Ok(now)
+			}
+		}
+	});
 
 	match mutate_stat {
 		// all good
@@ -107,11 +104,8 @@ pub(crate) fn set_check_offchain_execution_status<T: Trait>(
 /// unsigned transaction, without any signature.
 pub(crate) fn compute_offchain_election<T: Trait>() -> Result<(), OffchainElectionError> {
 	// compute raw solution. Note that we use `OffchainAccuracy`.
-	let ElectionResult {
-		winners,
-		assignments,
-	} = <Module<T>>::do_phragmen::<OffchainAccuracy>()
-		.ok_or(OffchainElectionError::ElectionFailed)?;
+	let ElectionResult { winners, assignments } =
+		<Module<T>>::do_phragmen::<OffchainAccuracy>().ok_or(OffchainElectionError::ElectionFailed)?;
 
 	// process and prepare it for submission.
 	let (winners, compact, score, size) = prepare_submission::<T>(assignments, winners, true)?;
@@ -120,18 +114,11 @@ pub(crate) fn compute_offchain_election<T: Trait>() -> Result<(), OffchainElecti
 	let current_era = <Module<T>>::current_era().unwrap_or_default();
 
 	// send it.
-	let call = Call::submit_election_solution_unsigned(
-		winners,
-		compact,
-		score,
-		current_era,
-		size,
-	).into();
+	let call = Call::submit_election_solution_unsigned(winners, compact, score, current_era, size).into();
 
 	SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call)
 		.map_err(|_| OffchainElectionError::PoolSubmissionFailed)
 }
-
 
 /// Takes an election result and spits out some data that can be submitted to the chain.
 ///
@@ -140,12 +127,16 @@ pub fn prepare_submission<T: Trait>(
 	assignments: Vec<Assignment<T::AccountId, OffchainAccuracy>>,
 	winners: Vec<(T::AccountId, ExtendedBalance)>,
 	do_reduce: bool,
-) -> Result<(
-	Vec<ValidatorIndex>,
-	CompactAssignments,
-	ElectionScore,
-	ElectionSize,
-), OffchainElectionError> where
+) -> Result<
+	(
+		Vec<ValidatorIndex>,
+		CompactAssignments,
+		ElectionScore,
+		ElectionSize,
+	),
+	OffchainElectionError,
+>
+where
 	ExtendedBalance: From<<OffchainAccuracy as PerThing>::Inner>,
 {
 	// make sure that the snapshot is available.
@@ -187,13 +178,9 @@ pub fn prepare_submission<T: Trait>(
 		iterations @ _ => {
 			let seed = sp_io::offchain::random_seed();
 			let iterations = <u32>::decode(&mut TrailingZeroInput::new(seed.as_ref()))
-				.expect("input is padded with zeroes; qed") % iterations.saturating_add(1);
-			balance_solution(
-				&mut staked,
-				&mut support_map,
-				Zero::zero(),
-				iterations as usize,
-			)
+				.expect("input is padded with zeroes; qed")
+				% iterations.saturating_add(1);
+			balance_solution(&mut staked, &mut support_map, Zero::zero(), iterations as usize)
 		}
 	};
 
@@ -224,19 +211,16 @@ pub fn prepare_submission<T: Trait>(
 	};
 
 	// compact encode the assignment.
-	let compact = CompactAssignments::from_assignment(
-		low_accuracy_assignment,
-		nominator_index,
-		validator_index,
-	).map_err(|e| OffchainElectionError::from(e))?;
+	let compact =
+		CompactAssignments::from_assignment(low_accuracy_assignment, nominator_index, validator_index)
+			.map_err(|e| OffchainElectionError::from(e))?;
 
 	// winners to index. Use a simple for loop for a more expressive early exit in case of error.
 	let mut winners_indexed: Vec<ValidatorIndex> = Vec::with_capacity(winners.len());
 	for w in winners {
 		if let Some(idx) = snapshot_validators.iter().position(|v| *v == w) {
-			let compact_index: ValidatorIndex = idx
-				.try_into()
-				.map_err(|_| OffchainElectionError::InvalidWinner)?;
+			let compact_index: ValidatorIndex =
+				idx.try_into().map_err(|_| OffchainElectionError::InvalidWinner)?;
 			winners_indexed.push(compact_index);
 		} else {
 			return Err(OffchainElectionError::InvalidWinner);

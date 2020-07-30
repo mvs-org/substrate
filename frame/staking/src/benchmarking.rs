@@ -21,9 +21,9 @@ use super::*;
 use crate::Module as Staking;
 use testing_utils::*;
 
-use sp_runtime::traits::One;
+pub use frame_benchmarking::{account, benchmarks};
 use frame_system::RawOrigin;
-pub use frame_benchmarking::{benchmarks, account};
+use sp_runtime::traits::One;
 const SEED: u32 = 0;
 const MAX_SPANS: u32 = 100;
 const MAX_VALIDATORS: u32 = 1000;
@@ -32,13 +32,15 @@ const MAX_SLASHES: u32 = 1000;
 // Add slashing spans to a user account. Not relevant for actual use, only to benchmark
 // read and write operations.
 fn add_slashing_spans<T: Trait>(who: &T::AccountId, spans: u32) {
-	if spans == 0 { return }
+	if spans == 0 {
+		return;
+	}
 
 	// For the first slashing span, we initialize
 	let mut slashing_spans = crate::slashing::SlashingSpans::new(0);
 	SpanSlash::<T>::insert((who, 0), crate::slashing::SpanRecord::default());
 
-	for i in 1 .. spans {
+	for i in 1..spans {
 		assert!(slashing_spans.end_span(i));
 		SpanSlash::<T>::insert((who, i), crate::slashing::SpanRecord::default());
 	}
@@ -47,7 +49,10 @@ fn add_slashing_spans<T: Trait>(who: &T::AccountId, spans: u32) {
 
 // This function generates one validator being nominated by n nominators, and returns the validator
 // stash account. It also starts an era and creates pending payouts.
-pub fn create_validator_with_nominators<T: Trait>(n: u32, upper_bound: u32) -> Result<T::AccountId, &'static str> {
+pub fn create_validator_with_nominators<T: Trait>(
+	n: u32,
+	upper_bound: u32,
+) -> Result<T::AccountId, &'static str> {
 	let mut points_total = 0;
 	let mut points_individual = Vec::new();
 
@@ -64,10 +69,13 @@ pub fn create_validator_with_nominators<T: Trait>(n: u32, upper_bound: u32) -> R
 	points_individual.push((v_stash.clone(), 10));
 
 	// Give the validator n nominators, but keep total users in the system the same.
-	for i in 0 .. upper_bound {
+	for i in 0..upper_bound {
 		let (_n_stash, n_controller) = create_stash_controller::<T>(u32::max_value() - i, 100)?;
 		if i < n {
-			Staking::<T>::nominate(RawOrigin::Signed(n_controller.clone()).into(), vec![stash_lookup.clone()])?;
+			Staking::<T>::nominate(
+				RawOrigin::Signed(n_controller.clone()).into(),
+				vec![stash_lookup.clone()],
+			)?;
 		}
 	}
 
@@ -602,7 +610,7 @@ benchmarks! {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::mock::{ExtBuilder, Test, Balances, Staking, Origin};
+	use crate::mock::{Balances, ExtBuilder, Origin, Staking, Test};
 	use frame_support::assert_ok;
 
 	#[test]
@@ -611,8 +619,7 @@ mod tests {
 			let v = 10;
 			let n = 100;
 
-			create_validators_with_nominators_for_era::<Test>(v, n, MAX_NOMINATIONS, false, None)
-				.unwrap();
+			create_validators_with_nominators_for_era::<Test>(v, n, MAX_NOMINATIONS, false, None).unwrap();
 
 			let count_validators = Validators::<Test>::iter().count();
 			let count_nominators = Nominators::<Test>::iter().count();
@@ -630,12 +637,17 @@ mod tests {
 			let validator_stash = create_validator_with_nominators::<Test>(
 				n,
 				<Test as Trait>::MaxNominatorRewardedPerValidator::get() as u32,
-			).unwrap();
+			)
+			.unwrap();
 
 			let current_era = CurrentEra::get().unwrap();
 
 			let original_free_balance = Balances::free_balance(&validator_stash);
-			assert_ok!(Staking::payout_stakers(Origin::signed(1337), validator_stash, current_era));
+			assert_ok!(Staking::payout_stakers(
+				Origin::signed(1337),
+				validator_stash,
+				current_era
+			));
 			let new_free_balance = Balances::free_balance(&validator_stash);
 
 			assert!(original_free_balance < new_free_balance);
@@ -650,7 +662,8 @@ mod tests {
 			let validator_stash = create_validator_with_nominators::<Test>(
 				n,
 				<Test as Trait>::MaxNominatorRewardedPerValidator::get() as u32,
-			).unwrap();
+			)
+			.unwrap();
 
 			// Add 20 slashing spans
 			let num_of_slashing_spans = 20;
@@ -658,14 +671,14 @@ mod tests {
 
 			let slashing_spans = SlashingSpans::<Test>::get(&validator_stash).unwrap();
 			assert_eq!(slashing_spans.iter().count(), num_of_slashing_spans as usize);
-			for i in 0 .. num_of_slashing_spans {
+			for i in 0..num_of_slashing_spans {
 				assert!(SpanSlash::<Test>::contains_key((&validator_stash, i)));
 			}
 
 			// Test everything is cleaned up
 			assert_ok!(Staking::kill_stash(&validator_stash, num_of_slashing_spans));
 			assert!(SlashingSpans::<Test>::get(&validator_stash).is_none());
-			for i in 0 .. num_of_slashing_spans {
+			for i in 0..num_of_slashing_spans {
 				assert!(!SpanSlash::<Test>::contains_key((&validator_stash, i)));
 			}
 		});
@@ -678,12 +691,16 @@ mod tests {
 			let n = 100;
 
 			let selected_benchmark = SelectedBenchmark::payout_all;
-			let c = vec![(frame_benchmarking::BenchmarkParameter::v, v), (frame_benchmarking::BenchmarkParameter::n, n)];
+			let c = vec![
+				(frame_benchmarking::BenchmarkParameter::v, v),
+				(frame_benchmarking::BenchmarkParameter::n, n),
+			];
 			let closure_to_benchmark =
 				<SelectedBenchmark as frame_benchmarking::BenchmarkingSetup<Test>>::instance(
 					&selected_benchmark,
-					&c
-				).unwrap();
+					&c,
+				)
+				.unwrap();
 
 			assert_ok!(closure_to_benchmark());
 		});
@@ -729,5 +746,4 @@ mod tests {
 			assert_ok!(test_benchmark_submit_solution_weaker::<Test>());
 		});
 	}
-
 }
