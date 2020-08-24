@@ -155,6 +155,7 @@ mod tests_local;
 mod tests_composite;
 mod benchmarking;
 mod default_weight;
+pub mod migration;
 
 use sp_std::prelude::*;
 use sp_std::{cmp, result, mem, fmt::Debug, ops::BitOr, convert::Infallible};
