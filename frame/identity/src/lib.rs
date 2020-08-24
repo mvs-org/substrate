@@ -87,7 +87,7 @@ use frame_support::{
 use frame_system::ensure_signed;
 
 mod benchmarking;
-mod migration;
+pub mod migration;
 
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
 type NegativeImbalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::NegativeImbalance;
