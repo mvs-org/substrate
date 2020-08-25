@@ -180,7 +180,7 @@ impl frame_system::Trait for Runtime {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
-		type MigrateAccount = ();
+	type MigrateAccount = ();
 }
 
 impl pallet_utility::Trait for Runtime {
