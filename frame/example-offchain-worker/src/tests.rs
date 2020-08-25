@@ -79,6 +79,7 @@ impl frame_system::Trait for Test {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 
 type Extrinsic = TestXt<Call<Test>, ()>;

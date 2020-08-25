@@ -183,6 +183,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 
 	type System = frame_system::Module<Test>;

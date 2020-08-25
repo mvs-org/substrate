@@ -56,7 +56,7 @@ use sp_runtime::{DispatchResult, RuntimeDebug, traits::{
 use frame_support::{decl_module, decl_event, decl_storage, decl_error, ensure, weights::Weight};
 use frame_support::traits::{
 	Currency, LockableCurrency, VestingSchedule, WithdrawReason, LockIdentifier,
-	ExistenceRequirement, Get,
+	ExistenceRequirement, Get, MigrateAccount,
 };
 use frame_system::{ensure_signed, ensure_root};
 
@@ -188,6 +188,12 @@ decl_error! {
 		ExistingVestingSchedule,
 		/// Amount being transferred is too low to create a vesting schedule.
 		AmountLow,
+	}
+}
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		Vesting::<T>::migrate_key_from_blake(a);
 	}
 }
 
@@ -462,6 +468,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 	impl pallet_balances::Trait for Test {
 		type Balance = u64;

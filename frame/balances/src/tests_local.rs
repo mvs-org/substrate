@@ -92,6 +92,7 @@ impl frame_system::Trait for Test {
 	type OnNewAccount = ();
 	type OnKilledAccount = Module<Test>;
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 parameter_types! {
 	pub const TransactionByteFee: u64 = 1;

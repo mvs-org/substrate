@@ -83,6 +83,7 @@ impl frame_system::Trait for Test {
 	type OnNewAccount = ();
 	type OnKilledAccount = Balances;
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 parameter_types! {
 	pub const ExistentialDeposit: Balance = 10;

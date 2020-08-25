@@ -325,6 +325,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 	ord_parameter_types! {
 		pub const One: u64 = 1;

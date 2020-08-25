@@ -163,7 +163,7 @@ use frame_support::{
 	weights::{Weight, DispatchClass},
 	traits::{
 		Currency, ReservableCurrency, LockableCurrency, WithdrawReason, LockIdentifier, Get,
-		OnUnbalanced, BalanceStatus, schedule::{Named as ScheduleNamed, DispatchTime}, EnsureOrigin
+		OnUnbalanced, BalanceStatus, schedule::{Named as ScheduleNamed, DispatchTime}, EnsureOrigin, MigrateAccount,
 	},
 	dispatch::DispatchResultWithPostInfo,
 };
@@ -173,6 +173,8 @@ mod vote_threshold;
 mod vote;
 mod conviction;
 mod types;
+pub mod migration;
+
 pub use vote_threshold::{Approved, VoteThreshold};
 pub use vote::{Vote, AccountVote, Voting};
 pub use conviction::Conviction;
@@ -632,6 +634,12 @@ mod weight_for {
 		T::DbWeight::get().reads_writes(1, 1)
 			.saturating_add(28_000_000)
 			.saturating_add(encoded_proposal_len.saturating_mul(3_000))
+	}
+}
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		migration::migrate_account::<T>(a)
 	}
 }
 

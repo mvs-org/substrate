@@ -117,6 +117,7 @@ impl frame_system::Trait for Test {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 parameter_types! {
 	pub MaximumSchedulerWeight: Weight = Perbill::from_percent(80) * MaximumBlockWeight::get();

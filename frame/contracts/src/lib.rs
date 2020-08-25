@@ -85,6 +85,7 @@ mod storage;
 mod exec;
 mod wasm;
 mod rent;
+pub mod migration;
 
 #[cfg(test)]
 mod tests;
@@ -110,7 +111,7 @@ use frame_support::{
 	decl_module, decl_event, decl_storage, decl_error,
 	parameter_types, storage::child::ChildInfo,
 	dispatch::{DispatchResult, DispatchResultWithPostInfo},
-	traits::{OnUnbalanced, Currency, Get, Time, Randomness},
+	traits::{OnUnbalanced, Currency, Get, Time, Randomness, MigrateAccount},
 };
 use frame_system::{ensure_signed, ensure_root};
 use pallet_contracts_primitives::{RentProjection, ContractAccessError};

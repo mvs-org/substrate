@@ -106,6 +106,7 @@ impl Trait for Test {
 	type OnNewAccount = ();
 	type OnKilledAccount = RecordKilled;
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 
 pub type System = Module<Test>;

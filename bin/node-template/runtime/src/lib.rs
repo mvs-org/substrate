@@ -190,6 +190,7 @@ impl system::Trait for Runtime {
 	type AccountData = balances::AccountData<Balance>;
 	/// Weight information for the extrinsics of this pallet.
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 
 impl aura::Trait for Runtime {

@@ -728,6 +728,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 	impl logger::Trait for Test {
 		type Event = ();

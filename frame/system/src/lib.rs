@@ -118,7 +118,7 @@ use frame_support::{
 	storage,
 	traits::{
 		Contains, Get, ModuleToIndex, OnNewAccount, OnKilledAccount, IsDeadAccount, Happened,
-		StoredMap, EnsureOrigin, OriginTrait, Filter,
+		StoredMap, EnsureOrigin, OriginTrait, Filter, MigrateAccount,
 	},
 	weights::{
 		Weight, RuntimeDbWeight, DispatchInfo, DispatchClass,
@@ -139,6 +139,7 @@ mod extensions;
 mod weights;
 #[cfg(test)]
 mod tests;
+pub mod migration;
 
 pub use extensions::{
 	check_mortality::CheckMortality, check_genesis::CheckGenesis, check_nonce::CheckNonce,
@@ -286,6 +287,7 @@ pub trait Trait: 'static + Eq + Clone {
 	type OnKilledAccount: OnKilledAccount<Self::AccountId>;
 
 	type SystemWeightInfo: WeightInfo;
+	type MigrateAccount: MigrateAccount<Self::AccountId>;
 }
 
 pub type DigestOf<T> = generic::Digest<<T as Trait>::Hash>;
@@ -548,6 +550,17 @@ decl_module! {
 
 		/// The maximum length of a block (in bytes).
 		const MaximumBlockLength: u32 = T::MaximumBlockLength::get();
+
+		// The edgeware migration is so big we just assume it consumes the whole block.
+		fn on_runtime_upgrade() -> Weight {
+			migration::migrate::<T>();
+
+			// Remove the old `RuntimeUpgraded` storage entry.
+			let mut runtime_upgraded_key = sp_io::hashing::twox_128(b"System").to_vec();
+			runtime_upgraded_key.extend(&sp_io::hashing::twox_128(b"RuntimeUpgraded"));
+			sp_io::storage::clear(&runtime_upgraded_key);
+			T::MaximumBlockWeight::get()
+		}
 
 		/// A dispatch that will fill the block weight up to the given ratio.
 		// TODO: This should only be available for testing, rather than in general usage, but

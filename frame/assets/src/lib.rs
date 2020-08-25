@@ -324,7 +324,9 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
+
 	impl Trait for Test {
 		type Event = ();
 		type Balance = u64;

@@ -81,12 +81,13 @@ use sp_runtime::traits::{StaticLookup, Zero, AppendZerosInput, Saturating};
 use frame_support::{
 	decl_module, decl_event, decl_storage, ensure, decl_error,
 	dispatch::DispatchResultWithPostInfo,
-	traits::{Currency, ReservableCurrency, OnUnbalanced, Get, BalanceStatus, EnsureOrigin},
+	traits::{Currency, ReservableCurrency, OnUnbalanced, Get, BalanceStatus, EnsureOrigin, MigrateAccount},
 	weights::Weight,
 };
 use frame_system::ensure_signed;
 
 mod benchmarking;
+pub mod migration;
 
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
 type NegativeImbalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::NegativeImbalance;
@@ -1329,6 +1330,18 @@ impl<T: Trait> Module<T> {
 	}
 }
 
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		if IdentityOf::<T>::migrate_key_from_blake(a).is_some() {
+			if let Some((_, subs)) = SubsOf::<T>::migrate_key_from_blake(a) {
+				for sub in subs.into_iter() {
+					SuperOf::<T>::migrate_key_from_blake(sub);
+				}
+			}
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1382,6 +1395,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 	parameter_types! {
 		pub const ExistentialDeposit: u64 = 1;

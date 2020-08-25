@@ -352,6 +352,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 	parameter_types! {
 		pub const MinimumPeriod: u64 = 5;

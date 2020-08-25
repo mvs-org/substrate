@@ -24,9 +24,11 @@ use sp_runtime::traits::{One, Zero, SaturatedConversion};
 use sp_std::{prelude::*, result, cmp, vec};
 use frame_support::{decl_module, decl_storage, decl_error, ensure};
 use frame_support::traits::Get;
-use frame_support::weights::{DispatchClass};
+use frame_support::weights::{DispatchClass, Weight};
 use frame_system::{ensure_none, Trait as SystemTrait};
 use sp_finality_tracker::{INHERENT_IDENTIFIER, FinalizedInherentData};
+
+pub mod migration;
 
 pub const DEFAULT_WINDOW_SIZE: u32 = 101;
 pub const DEFAULT_REPORT_LATENCY: u32 = 1000;
@@ -91,6 +93,10 @@ decl_module! {
 
 		fn on_finalize() {
 			Self::update_hint(<Self as Store>::Update::take())
+		}
+
+		fn on_runtime_upgrade() -> Weight {
+			migration::on_runtime_upgrade::<T>()
 		}
 	}
 }
@@ -278,6 +284,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 	parameter_types! {
 		pub const WindowSize: u64 = 11;

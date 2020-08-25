@@ -67,6 +67,7 @@ impl frame_system::Trait for Test {
 	type ExtrinsicBaseWeight = ();
 	type MaximumExtrinsicWeight = ();
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 parameter_types! {
 	pub const ExistentialDeposit: Balance = 10;

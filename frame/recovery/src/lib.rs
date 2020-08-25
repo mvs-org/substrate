@@ -161,7 +161,7 @@ use codec::{Encode, Decode};
 use frame_support::{
 	decl_module, decl_event, decl_storage, decl_error, ensure,
 	Parameter, RuntimeDebug, weights::GetDispatchInfo,
-	traits::{Currency, ReservableCurrency, Get, BalanceStatus},
+	traits::{Currency, ReservableCurrency, Get, BalanceStatus, MigrateAccount},
 	dispatch::PostDispatchInfo,
 };
 use frame_system::{self as system, ensure_signed, ensure_root};
@@ -319,6 +319,14 @@ decl_error! {
 		AlreadyProxy,
 	}
 }
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		Recoverable::<T>::migrate_key_from_blake(a);
+		Proxy::<T>::migrate_key_from_blake(a);
+	}
+}
+
 
 decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {

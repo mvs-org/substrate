@@ -112,6 +112,7 @@ impl frame_system::Trait for Test {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 
 impl<C> system::offchain::SendTransactionTypes<C> for Test

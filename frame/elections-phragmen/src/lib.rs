@@ -97,13 +97,14 @@ use frame_support::{
 	traits::{
 		Currency, Get, LockableCurrency, LockIdentifier, ReservableCurrency, WithdrawReasons,
 		ChangeMembers, OnUnbalanced, WithdrawReason, Contains, BalanceStatus, InitializeMembers,
-		ContainsLengthBound,
+		ContainsLengthBound, MigrateAccount,
 	}
 };
 use sp_npos_elections::{build_support_map, ExtendedBalance, VoteWeight, ElectionResult};
 use frame_system::{ensure_signed, ensure_root};
 
 mod benchmarking;
+pub mod migration;
 
 /// The maximum votes allowed per voter.
 pub const MAXIMUM_VOTE: usize = 16;
@@ -323,6 +324,12 @@ decl_module! {
 		type Error = Error<T>;
 
 		fn deposit_event() = default;
+
+		// The edgeware migration is so big we just assume it consumes the whole block.
+		fn on_runtime_upgrade() -> Weight {
+			migration::migrate::<T>();
+			T::MaximumBlockWeight::get()
+		}
 
 		const CandidacyBond: BalanceOf<T> = T::CandidacyBond::get();
 		const VotingBond: BalanceOf<T> = T::VotingBond::get();
@@ -728,6 +735,33 @@ decl_event!(
 	}
 );
 
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		mod deprecated {
+			use super::*;
+
+			decl_module! {
+				pub struct Module<T: Trait> for enum Call where origin: T::Origin { }
+			}
+			decl_storage! {
+				trait Store for Module<T: Trait> as PhragmenElection {
+					// Note these actually used to be `blake2_256`, but this way we can migrate them
+					// to then make use of them in the other migration.
+					pub VotesOf get(fn votes_of):
+						map hasher(twox_64_concat) T::AccountId => Vec<T::AccountId>;
+					pub StakeOf get(fn stake_of):
+						map hasher(twox_64_concat) T::AccountId => BalanceOf<T>;
+				}
+			}
+		}
+
+		// Note: only migrates the hasher, migration is completed in `migration.rs`
+		if deprecated::StakeOf::<T>::migrate_key_from_blake(a).is_some() {
+			deprecated::VotesOf::<T>::migrate_key_from_blake(a);
+		}
+	}
+}
+
 impl<T: Trait> Module<T> {
 	/// Attempts to remove a member `who`. If a runner-up exists, it is used as the replacement and
 	/// Ok(true). is returned.
@@ -1129,6 +1163,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 
 	parameter_types! {

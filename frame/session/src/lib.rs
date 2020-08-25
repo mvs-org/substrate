@@ -108,7 +108,7 @@ use sp_staking::SessionIndex;
 use frame_support::{
 	ensure, decl_module, decl_event, decl_storage, decl_error, ConsensusEngineId, Parameter,
 	traits::{
-		Get, FindAuthor, ValidatorRegistration, EstimateNextSessionRotation, EstimateNextNewSession,
+		Get, FindAuthor, ValidatorRegistration, EstimateNextSessionRotation, EstimateNextNewSession, MigrateAccount,
 	},
 	dispatch::{self, DispatchResult, DispatchError},
 	weights::Weight,
@@ -119,6 +119,7 @@ use frame_system::ensure_signed;
 mod mock;
 #[cfg(test)]
 mod tests;
+pub mod migration;
 
 #[cfg(feature = "historical")]
 pub mod historical;
@@ -501,6 +502,12 @@ decl_error! {
 		DuplicatedKey,
 		/// No keys are associated with this account.
 		NoKeys,
+	}
+}
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		migration::migrate_account::<T>(a)
 	}
 }
 

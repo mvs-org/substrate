@@ -55,7 +55,7 @@ use sp_runtime::{
 	},
 };
 use pallet_transaction_payment_rpc_runtime_api::RuntimeDispatchInfo;
-
+pub mod migration;
 /// Fee multiplier.
 pub type Multiplier = FixedU128;
 
@@ -291,6 +291,10 @@ decl_module! {
 					the multiplier doesn't increase."
 				);
 			})
+		}
+
+		fn on_runtime_upgrade() -> Weight {
+			migration::on_runtime_upgrade::<T>()
 		}
 	}
 }
@@ -644,6 +648,7 @@ mod tests {
 		type OnNewAccount = ();
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
+		type MigrateAccount = ();
 	}
 
 	parameter_types! {

@@ -279,6 +279,7 @@ pub mod benchmarking;
 pub mod slashing;
 pub mod offchain_election;
 pub mod inflation;
+pub mod migration;
 
 use sp_std::{
 	result,
@@ -298,7 +299,7 @@ use frame_support::{
 	},
 	traits::{
 		Currency, LockIdentifier, LockableCurrency, WithdrawReasons, OnUnbalanced, Imbalance, Get,
-		UnixTime, EstimateNextNewSession, EnsureOrigin,
+		UnixTime, EstimateNextNewSession, EnsureOrigin, MigrateAccount,
 	}
 };
 use pallet_session::historical;
@@ -1379,6 +1380,12 @@ decl_module! {
 
 		fn deposit_event() = default;
 
+		// The edgeware migration is so big we just assume it consumes the whole block.
+		fn on_runtime_upgrade() -> Weight {
+			migrate_hasher::<T>();
+			T::MaximumBlockWeight::get()
+		}
+
 		/// sets `ElectionStatus` to `Open(now)` where `now` is the block number at which the
 		/// election window has opened, if we are at the last session and less blocks than
 		/// `T::ElectionLookahead` is remaining until the next new session schedule. The offchain
@@ -2277,6 +2284,42 @@ decl_module! {
 				is expected."
 			);
 			Ok(adjustments)
+		}
+	}
+}
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		frame_support::runtime_print!("🕊️  Migrating Staking Account '{:?}'", a);
+		if let Some(controller) = Bonded::<T>::migrate_key_from_blake(a) {
+			frame_support::runtime_print!(
+				"Migrating Staking stash account '{:?}' with controller '{:?}'", a, controller);
+			Ledger::<T>::migrate_key_from_blake(controller);
+			Payee::<T>::migrate_key_from_blake(a);
+			Validators::<T>::migrate_key_from_blake(a);
+			Nominators::<T>::migrate_key_from_blake(a);
+			SlashingSpans::<T>::migrate_key_from_blake(a);
+		} else if let Some(StakingLedger { stash, .. }) = Ledger::<T>::migrate_key_from_blake(a) {
+			frame_support::runtime_print!(
+				"Migrating Staking controller account '{:?}' with stash '{:?}'", a, &stash);
+			Bonded::<T>::migrate_key_from_blake(&stash);
+			Payee::<T>::migrate_key_from_blake(&stash);
+			Validators::<T>::migrate_key_from_blake(&stash);
+			Nominators::<T>::migrate_key_from_blake(&stash);
+			SlashingSpans::<T>::migrate_key_from_blake(&stash);
+		}
+		frame_support::runtime_print!("🕊️  Done Staking Account '{:?}'", a);
+	}
+}
+
+fn migrate_hasher<T: Trait>() {
+	if let Some(current_era) = CurrentEra::get() {
+		let history_depth = HistoryDepth::get();
+		for era in current_era.saturating_sub(history_depth)..=current_era {
+			ErasStartSessionIndex::migrate_key_from_blake(era);
+			ErasValidatorReward::<T>::migrate_key_from_blake(era);
+			ErasRewardPoints::<T>::migrate_key_from_blake(era);
+			ErasTotalStake::<T>::migrate_key_from_blake(era);
 		}
 	}
 }

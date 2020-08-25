@@ -1136,6 +1136,7 @@ impl<T: Subtrait> frame_system::Trait for ElevatedTrait<T> {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
+		type MigrateAccount = ();
 }
 impl<T: Subtrait> Trait for ElevatedTrait<T> {
 	type Balance = T::Balance;

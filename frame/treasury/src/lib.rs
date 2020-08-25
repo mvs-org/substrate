@@ -324,6 +324,16 @@ decl_error! {
 	}
 }
 
+mod migration {
+	use super::*;
+	pub fn migrate<T: Trait>() {
+		for i in 0..ProposalCount::get() {
+			Proposals::<T>::migrate_key_from_blake(i);
+		}
+		Reasons::<T>::remove_all();
+	}
+}
+
 decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		/// Fraction of a proposal's value that should be bonded in order to place the proposal.
@@ -357,6 +367,12 @@ decl_module! {
 		type Error = Error<T>;
 
 		fn deposit_event() = default;
+
+		// The edgeware migration is so big we just assume it consumes the whole block.
+		fn on_runtime_upgrade() -> Weight {
+			migration::migrate::<T>();
+			T::MaximumBlockWeight::get()
+		}
 
 		/// Put forward a suggestion for spending. A deposit proportional to the value
 		/// is reserved and slashed if the proposal is rejected. It is returned once the

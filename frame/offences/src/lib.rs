@@ -121,6 +121,14 @@ decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		fn deposit_event() = default;
 
+		// The edgeware migration is so big we just assume it consumes the whole block.
+		fn on_runtime_upgrade() -> Weight {
+			Reports::<T>::remove_all();
+			ConcurrentReportsIndex::<T>::remove_all();
+			ReportsByKindIndex::remove_all();
+			T::MaximumBlockWeight::get()
+		}
+
 		fn on_initialize(now: T::BlockNumber) -> Weight {
 			// only decode storage if we can actually submit anything again.
 			if !T::OnOffenceHandler::can_report() {
