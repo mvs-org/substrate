@@ -446,6 +446,15 @@ impl<T: Trait> Module<T> {
 		}
 	}
 
+
+	fn decrement_nonce(address: &H160, count: usize) {
+		let account_id = T::AddressMapping::into_account_id(*address);
+
+		for 0..count {
+			frame_system::Module::<T>::dec_account_nonce(&account_id);
+		}
+	}
+
 	/// Check whether an account is empty.
 	pub fn is_account_empty(address: &H160) -> bool {
 		let account = Self::account_basic(address);
@@ -631,6 +640,13 @@ impl<T: Trait> Module<T> {
 			let (values, logs) = executor.deconstruct();
 			backend.apply(values, logs, true);
 		}
+
+		let _ = match retv {
+			ExitReason::Error(e) => Self::decrement_nonce(&source, values.len())
+			ExitReason::Revert(e) => Self::decrement_nonce(&source, values.len())
+			ExitReason::Fatal(e) => Self::decrement_nonce(&source, values.len())
+			_ => {}
+		};
 
 		Ok((retv, reason, used_gas))
 	}
