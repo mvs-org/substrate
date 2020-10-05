@@ -47,6 +47,13 @@ impl<T> Filter<T> for () {
 	fn filter(_: &T) -> bool { true }
 }
 
+/// Migrate a given account.
+#[impl_trait_for_tuples::impl_for_tuples(30)]
+pub trait MigrateAccount<A> {
+	/// Migrate the `account`.
+	fn migrate_account(account: &A);
+}
+
 /// Trait to add a constraint onto the filter.
 pub trait FilterStack<T>: Filter<T> {
 	/// The type used to archive the stack.

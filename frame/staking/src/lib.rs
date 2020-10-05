@@ -299,7 +299,7 @@ use frame_support::{
 	},
 	traits::{
 		Currency, LockIdentifier, LockableCurrency, WithdrawReasons, OnUnbalanced, Imbalance, Get,
-		UnixTime, EstimateNextNewSession, EnsureOrigin,
+		UnixTime, EstimateNextNewSession, EnsureOrigin, MigrateAccount,
 	}
 };
 use pallet_session::historical;
@@ -2154,6 +2154,30 @@ decl_module! {
 			);
 			Ok(adjustments)
 		}
+	}
+}
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		frame_support::runtime_print!("🕊️  Migrating Staking Account '{:?}'", a);
+		if let Some(controller) = Bonded::<T>::migrate_key_from_blake(a) {
+			frame_support::runtime_print!(
+				"Migrating Staking stash account '{:?}' with controller '{:?}'", a, controller);
+			Ledger::<T>::migrate_key_from_blake(controller);
+			Payee::<T>::migrate_key_from_blake(a);
+			Validators::<T>::migrate_key_from_blake(a);
+			Nominators::<T>::migrate_key_from_blake(a);
+			SlashingSpans::<T>::migrate_key_from_blake(a);
+		} else if let Some(StakingLedger { stash, .. }) = Ledger::<T>::migrate_key_from_blake(a) {
+			frame_support::runtime_print!(
+				"Migrating Staking controller account '{:?}' with stash '{:?}'", a, &stash);
+			Bonded::<T>::migrate_key_from_blake(&stash);
+			Payee::<T>::migrate_key_from_blake(&stash);
+			Validators::<T>::migrate_key_from_blake(&stash);
+			Nominators::<T>::migrate_key_from_blake(&stash);
+			SlashingSpans::<T>::migrate_key_from_blake(&stash);
+		}
+		frame_support::runtime_print!("🕊️  Done Staking Account '{:?}'", a);
 	}
 }
 

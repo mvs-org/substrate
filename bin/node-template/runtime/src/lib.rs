@@ -190,6 +190,7 @@ impl frame_system::Trait for Runtime {
 	type AccountData = pallet_balances::AccountData<Balance>;
 	/// Weight information for the extrinsics of this pallet.
 	type SystemWeightInfo = ();
+	type MigrateAccount = ();
 }
 
 impl pallet_aura::Trait for Runtime {

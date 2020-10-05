@@ -166,7 +166,7 @@ use frame_support::{
 		Currency, OnKilledAccount, OnUnbalanced, TryDrop, StoredMap,
 		WithdrawReason, WithdrawReasons, LockIdentifier, LockableCurrency, ExistenceRequirement,
 		Imbalance, SignedImbalance, ReservableCurrency, Get, ExistenceRequirement::KeepAlive,
-		ExistenceRequirement::AllowDeath, IsDeadAccount, BalanceStatus as Status,
+		ExistenceRequirement::AllowDeath, IsDeadAccount, BalanceStatus as Status, MigrateAccount,
 	}
 };
 use sp_runtime::{
@@ -907,6 +907,7 @@ impl<T: Subtrait<I>, I: Instance> frame_system::Trait for ElevatedTrait<T, I> {
 	type OnKilledAccount = T::OnKilledAccount;
 	type AccountData = T::AccountData;
 	type SystemWeightInfo = T::SystemWeightInfo;
+	type MigrateAccount = T::MigrateAccount;
 }
 impl<T: Subtrait<I>, I: Instance> Trait<I> for ElevatedTrait<T, I> {
 	type Balance = T::Balance;
@@ -1357,6 +1358,12 @@ where
 		let mut locks = Self::locks(who);
 		locks.retain(|l| l.id != id);
 		Self::update_locks(who, &locks[..]);
+	}
+}
+
+impl<T: Trait<I>, I: Instance> MigrateAccount<T::AccountId> for Module<T, I> {
+	fn migrate_account(account: &T::AccountId) {
+		Locks::<T, I>::migrate_key_from_blake(account);
 	}
 }
 

@@ -118,7 +118,7 @@ use frame_support::{
 	storage,
 	traits::{
 		Contains, Get, PalletInfo, OnNewAccount, OnKilledAccount, IsDeadAccount, Happened,
-		StoredMap, EnsureOrigin, OriginTrait, Filter,
+		StoredMap, EnsureOrigin, OriginTrait, Filter, MigrateAccount,
 	},
 	weights::{
 		Weight, RuntimeDbWeight, DispatchInfo, DispatchClass,
@@ -277,6 +277,9 @@ pub trait Trait: 'static + Eq + Clone {
 	type OnKilledAccount: OnKilledAccount<Self::AccountId>;
 
 	type SystemWeightInfo: WeightInfo;
+
+	/// Migrate an account.
+	type MigrateAccount: MigrateAccount<Self::AccountId>;
 }
 
 pub type DigestOf<T> = generic::Digest<<T as Trait>::Hash>;
@@ -725,6 +728,19 @@ decl_module! {
 			ensure!(account.refcount == 0, Error::<T>::NonZeroRefCount);
 			ensure!(account.data == T::AccountData::default(), Error::<T>::NonDefaultComposite);
 			Self::kill_account(&who);
+		}
+
+		// TODO: Update the weight here to avoid DoS attacks. Alternatively: remove it quickly in
+		// another upgrade.
+		#[weight = accounts.len() as Weight * 10_000]
+		fn migrate_accounts(origin, accounts: Vec<T::AccountId>) {
+			let _ = ensure_signed(origin)?;
+			for a in &accounts {
+				if Account::<T>::migrate_key_from_blake(a).is_some() {
+					// Inform other modules about the account.
+					T::MigrateAccount::migrate_account(a);
+				}
+			}
 		}
 	}
 }

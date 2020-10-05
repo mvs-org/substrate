@@ -163,7 +163,8 @@ use frame_support::{
 	weights::{Weight, DispatchClass, Pays},
 	traits::{
 		Currency, ReservableCurrency, LockableCurrency, WithdrawReason, LockIdentifier, Get,
-		OnUnbalanced, BalanceStatus, schedule::{Named as ScheduleNamed, DispatchTime}, EnsureOrigin
+		OnUnbalanced, BalanceStatus, schedule::{Named as ScheduleNamed, DispatchTime}, EnsureOrigin,
+		MigrateAccount,
 	},
 	dispatch::DispatchResultWithPostInfo,
 };
@@ -1778,5 +1779,15 @@ fn decode_compact_u32_at(key: &[u8]) -> Option<u32> {
 			sp_runtime::print(key);
 			None
 		}
+	}
+}
+
+pub fn migrate_account<T: Trait>(a: &T::AccountId) {
+	Locks::<T>::migrate_key_from_blake(a);
+}
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		migrate_account::<T>(a)
 	}
 }

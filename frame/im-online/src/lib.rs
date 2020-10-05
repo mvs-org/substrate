@@ -95,7 +95,7 @@ use sp_staking::{
 };
 use frame_support::{
 	decl_module, decl_event, decl_storage, Parameter, debug, decl_error,
-	traits::Get,
+	traits::{Get, MigrateAccount},
 	weights::Weight,
 };
 use frame_system::ensure_none;
@@ -316,6 +316,16 @@ decl_error! {
 		InvalidKey,
 		/// Duplicated heartbeat.
 		DuplicatedHeartbeat,
+	}
+}
+
+impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
+	fn migrate_account(a: &T::AccountId) {
+		use frame_support::Blake2_256;
+		let current_index = <pallet_session::Module<T>>::current_index();
+		if let Ok(v) = a.using_encoded(|mut d| T::ValidatorId::decode(&mut d)) {
+			AuthoredBlocks::<T>::migrate_keys::<Blake2_256, Blake2_256, _, _>(current_index, v);
+		}
 	}
 }
 
