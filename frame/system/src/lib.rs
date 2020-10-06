@@ -736,11 +736,49 @@ decl_module! {
 		fn migrate_accounts(origin, accounts: Vec<T::AccountId>) {
 			let _ = ensure_signed(origin)?;
 			for a in &accounts {
-				if Account::<T>::migrate_key_from_blake(a).is_some() {
+				if deprecated::Account::<T>::migrate_key_from_blake(a).is_some() {
 					// Inform other modules about the account.
 					T::MigrateAccount::migrate_account(a);
+
+					if !UpgradedToU32RefCount::get() {
+						deprecated::Account::<T>::translate::<(T::Index, u8, T::AccountData), _>(|_key, (nonce, rc, data)|
+							Some(AccountInfo { nonce, refcount: rc as RefCount, data })
+						);
+						UpgradedToU32RefCount::put(true);
+						T::MaximumBlockWeight::get()
+					} else {
+						0
+					}
 				}
 			}
+		}
+	}
+}
+
+mod deprecated {
+	use super::*;
+
+	/// Type used to encode the number of references an account has.
+	pub type RefCount = u8;
+
+	/// Information of an account.
+	#[derive(Clone, Eq, PartialEq, Default, RuntimeDebug, Encode, Decode)]
+	pub struct AccountInfo<Index, AccountData> {
+		/// The number of transactions this account has sent.
+		pub nonce: Index,
+		/// The number of other modules that currently depend on this account's existence. The account
+		/// cannot be reaped until this is zero.
+		pub refcount: RefCount,
+		/// The additional data that belongs to this account. Used to store the balance(s) in a lot of
+		/// chains.
+		pub data: AccountData,
+	}
+
+	decl_storage! {
+		trait Store for Module<T: Trait> as System {
+			/// The full account information for a particular account ID.
+			pub Account get(fn account):
+				map hasher(blake2_128_concat) T::AccountId => AccountInfo<T::Index, T::AccountData>;
 		}
 	}
 }
