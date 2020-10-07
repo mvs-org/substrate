@@ -737,18 +737,16 @@ decl_module! {
 			let _ = ensure_signed(origin)?;
 			for a in &accounts {
 				if deprecated::Account::<T>::migrate_key_from_blake(a).is_some() {
-					// Inform other modules about the account.
-					T::MigrateAccount::migrate_account(a);
-
 					if !UpgradedToU32RefCount::get() {
-						deprecated::Account::<T>::translate::<(T::Index, u8, T::AccountData), _>(|_key, (nonce, rc, data)|
+						sp_runtime::print("🕊️  Migrating refcount account records");
+						Account::<T>::translate::<(T::Index, u8, T::AccountData), _>(|_key, (nonce, rc, data)|
 							Some(AccountInfo { nonce, refcount: rc as RefCount, data })
 						);
 						UpgradedToU32RefCount::put(true);
-						T::MaximumBlockWeight::get()
-					} else {
-						0
+						T::MaximumBlockWeight::get();
 					}
+					// Inform other modules about the account.
+					T::MigrateAccount::migrate_account(a);
 				}
 			}
 		}
@@ -772,6 +770,12 @@ mod deprecated {
 		/// The additional data that belongs to this account. Used to store the balance(s) in a lot of
 		/// chains.
 		pub data: AccountData,
+	}
+
+	decl_module! {
+		pub struct Module<T: Trait> for enum Call where origin: T::Origin, system=self {
+			type Error = Error<T>;
+		}
 	}
 
 	decl_storage! {
