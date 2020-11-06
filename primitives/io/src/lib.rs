@@ -743,6 +743,7 @@ pub trait Hashing {
 pub trait OffchainIndex {
 	/// Write a key value pair to the Offchain DB database in a buffered fashion.
 	fn set(&mut self, key: &[u8], value: &[u8]) {
+		log::debug!(target: "offchain", "Set {:?}: {:?}", key, value);
 		self.set_offchain_storage(key, Some(value));
 	}
 

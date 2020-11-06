@@ -31,7 +31,7 @@ use sp_core::{
 	},
 	traits::Externalities, Blake2Hasher,
 };
-use log::warn;
+use log::{debug, warn};
 use codec::Encode;
 use sp_externalities::{Extensions, Extension};
 
@@ -135,7 +135,9 @@ impl From<BTreeMap<StorageKey, StorageValue>> for BasicExternalities {
 }
 
 impl Externalities for BasicExternalities {
-	fn set_offchain_storage(&mut self, _key: &[u8], _value: Option<&[u8]>) {}
+	fn set_offchain_storage(&mut self, _key: &[u8], _value: Option<&[u8]>) {
+		debug!(target: "offchain", "Set {:?}: {:?}", _key, _value);
+	}
 
 	fn storage(&self, key: &[u8]) -> Option<StorageValue> {
 		self.inner.top.get(key).cloned()
