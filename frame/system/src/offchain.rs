@@ -90,7 +90,11 @@ where
 		signature: Option<<T::Extrinsic as ExtrinsicT>::SignaturePayload>,
 	) -> Result<(), ()> {
 		let xt = T::Extrinsic::new(call.into(), signature).ok_or(())?;
-		debug::error!("extrinsic: {:?}", hex::encode(xt.encode()));
+		debug::native::info!(
+			target: "offchain",
+			"extrinsic: {:?}",
+			hex::encode(xt.encode())
+		);
 		sp_io::offchain::submit_transaction(xt.encode())
 	}
 
