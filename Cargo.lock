@@ -1726,6 +1726,7 @@ version = "2.0.0"
 dependencies = [
  "criterion",
  "frame-support",
+ "hex",
  "impl-trait-for-tuples",
  "parity-scale-codec",
  "serde",
