@@ -27,7 +27,7 @@ pub struct TransactionPoolParams {
 	pub pool_limit: usize,
 
 	/// Maximum number of kilobytes of all transactions stored in the pool.
-	#[structopt(long = "pool-kbytes", value_name = "COUNT", default_value = "20480")]
+	#[structopt(long = "pool-kbytes", value_name = "COUNT", default_value = "327680")]
 	pub pool_kbytes: usize,
 }
 

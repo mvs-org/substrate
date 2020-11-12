@@ -114,11 +114,11 @@ impl Default for Options {
 		Options {
 			ready: base::Limit {
 				count: 8192,
-				total_bytes: 20 * 1024 * 1024,
+				total_bytes: 256 * 1024 * 1024,
 			},
 			future: base::Limit {
 				count: 512,
-				total_bytes: 1 * 1024 * 1024,
+				total_bytes: 128 * 1024 * 1024,
 			},
 			reject_future_transactions: false,
 		}
