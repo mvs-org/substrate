@@ -28,7 +28,7 @@ use sp_runtime::{
 use frame_support::{
 	traits::{Get},
 	weights::{PostDispatchInfo, DispatchInfo, DispatchClass, priority::FrameTransactionPriority},
-	StorageValue,
+	StorageValue, debug,
 };
 
 /// Block resource (weight) limit check.
@@ -53,13 +53,15 @@ impl<T: Trait + Send + Sync> CheckWeight<T> where
 	fn check_extrinsic_weight(
 		info: &DispatchInfoOf<T::Call>,
 	) -> Result<(), TransactionValidityError> {
+		let maximum_weight = T::MaximumExtrinsicWeight::get();
+		debug::info!("Extrinsic weight: {:?}", info.weight);
+		debug::info!("Maximum extrinsic weight: {:?}", maximum_weight);
 		match info.class {
 			// Mandatory transactions are included in a block unconditionally, so
 			// we don't verify weight.
 			DispatchClass::Mandatory => Ok(()),
 			// Normal transactions must not exceed `MaximumExtrinsicWeight`.
 			DispatchClass::Normal => {
-				let maximum_weight = T::MaximumExtrinsicWeight::get();
 				let extrinsic_weight = info.weight.saturating_add(T::ExtrinsicBaseWeight::get());
 				if extrinsic_weight > maximum_weight {
 					Err(InvalidTransaction::ExhaustsResources.into())
@@ -70,7 +72,6 @@ impl<T: Trait + Send + Sync> CheckWeight<T> where
 			// For operational transactions we make sure it doesn't exceed
 			// the space alloted for `Operational` class.
 			DispatchClass::Operational => {
-				let maximum_weight = T::MaximumBlockWeight::get();
 				let operational_limit =
 					Self::get_dispatch_limit_ratio(DispatchClass::Operational) * maximum_weight;
 				let operational_limit =
@@ -93,6 +94,7 @@ impl<T: Trait + Send + Sync> CheckWeight<T> where
 	) -> Result<crate::weights::ExtrinsicsWeight, TransactionValidityError> {
 		let maximum_weight = T::MaximumBlockWeight::get();
 		let mut all_weight = Module::<T>::block_weight();
+		debug::info!("Maximum block weight: {:?}", maximum_weight);
 		match info.class {
 			// If we have a dispatch that must be included in the block, it ignores all the limits.
 			DispatchClass::Mandatory => {
@@ -146,6 +148,8 @@ impl<T: Trait + Send + Sync> CheckWeight<T> where
 	) -> Result<u32, TransactionValidityError> {
 		let current_len = Module::<T>::all_extrinsics_len();
 		let maximum_len = T::MaximumBlockLength::get();
+		debug::info!("Extrinsic len: {:?}", len);
+		debug::info!("Maximum block len: {:?}", maximum_len);
 		let limit = Self::get_dispatch_limit_ratio(info.class) * maximum_len;
 		let added_len = len as u32;
 		let next_len = current_len.saturating_add(added_len);
