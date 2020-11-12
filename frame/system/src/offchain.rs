@@ -177,7 +177,7 @@ impl<T: SigningTypes, C: AppCrypto<T::Public, T::Signature>, X> Signer<T, C, X> 
 		}
 	}
 
-	fn keystore_accounts(&self) -> impl Iterator<Item = Account<T>> {
+	pub fn keystore_accounts(&self) -> impl Iterator<Item = Account<T>> {
 		C::RuntimeAppPublic::all()
 			.into_iter()
 			.enumerate()
