@@ -62,14 +62,14 @@ pub trait DefaultConfigurationValues {
 	///
 	/// By default this is `8831`.
 	fn rpc_ws_listen_port() -> u16 {
-		8830
+		8831
 	}
 
 	/// The port Substrate should listen on for http connections.
 	///
 	/// By default this is `8830`.
 	fn rpc_http_listen_port() -> u16 {
-		8831
+		8830
 	}
 
 	/// The port Substrate should listen on for prometheus connections.
