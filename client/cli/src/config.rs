@@ -62,7 +62,7 @@ pub trait DefaultConfigurationValues {
 	///
 	/// By default this is `8831`.
 	fn rpc_ws_listen_port() -> u16 {
-		8831
+		// 8831
 	}
 
 	/// The port Substrate should listen on for http connections.
