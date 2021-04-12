@@ -38,7 +38,7 @@ pub struct TryRuntimeCmd {
 	pub shared_params: sc_cli::SharedParams,
 
 	/// The state to use to run the migration. Should be a valid FILE or HTTP URI.
-	#[structopt(short, long, default_value = "http://localhost:9933")]
+	#[structopt(short, long, default_value = "http://localhost:8830")]
 	pub state: State,
 
 	/// The execution strategy that should be used for benchmarks

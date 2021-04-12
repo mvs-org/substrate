@@ -60,14 +60,14 @@ pub trait DefaultConfigurationValues {
 
 	/// The port Substrate should listen on for websocket connections.
 	///
-	/// By default this is `9944`.
+	/// By default this is `8831`.
 	fn rpc_ws_listen_port() -> u16 {
 		8830
 	}
 
 	/// The port Substrate should listen on for http connections.
 	///
-	/// By default this is `9933`.
+	/// By default this is `8830`.
 	fn rpc_http_listen_port() -> u16 {
 		8831
 	}

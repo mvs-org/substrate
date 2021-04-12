@@ -17,7 +17,7 @@
 # 2. Start networks and containers:
 #    `sudo docker-compose -f .maintain/sentry-node/docker-compose.yml up`
 # 3. Connect to nodes:
-#   - validator-a: localhost:9944
+#   - validator-a: localhost:8831
 #   - validator-b: localhost:9945
 #   - light-c: localhost:9946
 #   - via polkadot.js/apps: https://polkadot.js.org/apps/?rpc=ws%3A%2F%2Flocalhost%3A<NODE_PORT>#/explorer
@@ -30,7 +30,7 @@ services:
 
   validator-a:
     ports:
-      - "9944:9944"
+      - "8831:8831"
       - "9615:9615"
     volumes:
       - ../../target/release/substrate:/usr/local/bin/substrate
@@ -62,7 +62,7 @@ services:
   validator-b:
     image: parity/substrate
     ports:
-      - "9945:9944"
+      - "9945:8831"
     volumes:
       - ../../target/release/substrate:/usr/local/bin/substrate
     networks:
@@ -92,7 +92,7 @@ services:
   light-c:
     image: parity/substrate
     ports:
-      - "9946:9944"
+      - "9946:8831"
     volumes:
       - ../../target/release/substrate:/usr/local/bin/substrate
     networks:

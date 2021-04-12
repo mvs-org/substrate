@@ -120,7 +120,7 @@ type Hash = sp_core::H256;
 // TODO: make these two generic.
 
 const LOG_TARGET: &str = "remote-ext";
-const TARGET: &str = "http://localhost:9933";
+const TARGET: &str = "http://localhost:8830";
 
 jsonrpsee_proc_macros::rpc_client_api! {
 	RpcApi {
