@@ -55,21 +55,21 @@ pub trait DefaultConfigurationValues {
 	///
 	/// By default this is `30333`.
 	fn p2p_listen_port() -> u16 {
-		30333
+		5252
 	}
 
 	/// The port Substrate should listen on for websocket connections.
 	///
 	/// By default this is `9944`.
 	fn rpc_ws_listen_port() -> u16 {
-		9944
+		8830
 	}
 
 	/// The port Substrate should listen on for http connections.
 	///
 	/// By default this is `9933`.
 	fn rpc_http_listen_port() -> u16 {
-		9933
+		8831
 	}
 
 	/// The port Substrate should listen on for prometheus connections.
