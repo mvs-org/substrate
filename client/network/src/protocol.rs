@@ -1030,15 +1030,15 @@ impl<B: BlockT> Protocol<B> {
 
 	/// Adds a `PeerId` to the list of reserved peers.
 	pub fn add_set_reserved_peer(&self, protocol: Cow<'static, str>, peer: PeerId) {
-		//if //let Some(index) = self.notification_protocols.iter().position(|p| *p == protocol) {
-			self.peerset_handle.add_reserved_peer(sc_peerset::SetId::from(0 + NUM_HARDCODED_PEERSETS), peer);
-		//} else {
-		// 	log::error!(
-		// 		target: "sub-libp2p",
-		// 		"add_set_reserved_peer with unknown protocol: {}",
-		// 		protocol
-		// 	);
-		// }
+		if let Some(index) = self.notification_protocols.iter().position(|p| *p == protocol) {
+			self.peerset_handle.add_reserved_peer(sc_peerset::SetId::from(index + NUM_HARDCODED_PEERSETS), peer);
+		} else {
+			log::error!(
+				target: "sub-libp2p",
+				"add_set_reserved_peer with unknown protocol: {}",
+				protocol
+			);
+		}
 	}
 
 	/// Notify the protocol that we have learned about the existence of nodes on the default set.

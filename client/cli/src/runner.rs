@@ -160,15 +160,15 @@ impl<C: SubstrateCli> Runner<C> {
 	/// 2020-06-03 16:14:21 ⛓  Native runtime: node-251 (substrate-node-1.tx1.au10)
 	/// ```
 	fn print_node_infos(&self) {
-		// info!("{}", C::impl_name());
-		// info!("✌️  version {}", C::impl_version());
+		info!("{}", C::impl_name());
+		info!("✌️  version {}", C::impl_version());
 		info!(
-			"❤️  by Metaverse team, 2021",
-			// C::author(),
-			// C::copyright_start_year(),
-			// Local::today().year(),
+			"❤️  by {}, {}-{}",
+			C::author(),
+			C::copyright_start_year(),
+			Local::today().year(),
 		);
-		//info!("📋 Chain specification: {}", self.config.chain_spec.name());
+		info!("📋 Chain specification: {}", self.config.chain_spec.name());
 		info!("🏷 Node name: {}", self.config.network.node_name);
 		info!("👤 Role: {}", self.config.display_role());
 		info!("💾 Database: {} at {}",
