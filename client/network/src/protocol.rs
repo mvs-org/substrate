@@ -1041,7 +1041,7 @@ impl<B: BlockT> Protocol<B> {
 		} else {
 			log::error!(
 				target: "sub-libp2p",
-				"add_set_reserved_peer with unknown protocol: {}",
+				"Test add_set_reserved_peer with unknown protocol: {}",
 				protocol
 			);
 		}
