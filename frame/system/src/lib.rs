@@ -88,10 +88,14 @@ use frame_support::{
 	Parameter, storage,
 	traits::{
 <<<<<<< HEAD
+<<<<<<< HEAD
 		Contains, Get, PalletInfo, OnNewAccount, OnKilledAccount, IsDeadAccount, Happened,
 		StoredMap, EnsureOrigin, OriginTrait, Filter, MigrateAccount,
 =======
 		Contains, Get, PalletInfo, OnNewAccount, OnKilledAccount, HandleLifetime,
+=======
+		SortedMembers, Get, PalletInfo, OnNewAccount, OnKilledAccount, HandleLifetime,
+>>>>>>> 37e97cfec065fe4acc9712b4dd9a79ec1936fa7d
 		StoredMap, EnsureOrigin, OriginTrait, Filter,
 >>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 	},
@@ -99,7 +103,7 @@ use frame_support::{
 		Weight, RuntimeDbWeight, DispatchInfo, DispatchClass,
 		extract_actual_weight, PerDispatchClass,
 	},
-	dispatch::DispatchResultWithPostInfo,
+	dispatch::{DispatchResultWithPostInfo, DispatchResult},
 };
 use codec::{Encode, Decode, FullCodec, EncodeLike};
 
@@ -340,6 +344,19 @@ pub type ConsumedWeight = PerDispatchClass<Weight>;
 
 pub use pallet::*;
 
+/// Do something when we should be setting the code.
+pub trait SetCode {
+	/// Set the code to the given blob.
+	fn set_code(code: Vec<u8>) -> DispatchResult;
+}
+
+impl SetCode for () {
+	fn set_code(code: Vec<u8>) -> DispatchResult {
+		storage::unhashed::put_raw(well_known_keys::CODE, &code);
+		Ok(())
+	}
+}
+
 #[frame_support::pallet]
 pub mod pallet {
 	use crate::{*, pallet_prelude::*, self as frame_system};
@@ -453,6 +470,10 @@ pub mod pallet {
 		/// an identifier of the chain.
 		#[pallet::constant]
 		type SS58Prefix: Get<u8>;
+
+		/// What to do if the user wants the code set to something. Just use `()` unless you are in
+		/// cumulus.
+		type OnSetCode: SetCode;
 	}
 
 	#[pallet::pallet]
@@ -529,7 +550,7 @@ pub mod pallet {
 			ensure_root(origin)?;
 			Self::can_set_code(&code)?;
 
-			storage::unhashed::put_raw(well_known_keys::CODE, &code);
+			T::OnSetCode::set_code(code)?;
 			Self::deposit_event(Event::CodeUpdated);
 			Ok(().into())
 		}
@@ -548,7 +569,7 @@ pub mod pallet {
 			code: Vec<u8>,
 		) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
-			storage::unhashed::put_raw(well_known_keys::CODE, &code);
+			T::OnSetCode::set_code(code)?;
 			Self::deposit_event(Event::CodeUpdated);
 			Ok(().into())
 		}
@@ -1108,7 +1129,7 @@ impl<
 pub struct EnsureSignedBy<Who, AccountId>(sp_std::marker::PhantomData<(Who, AccountId)>);
 impl<
 	O: Into<Result<RawOrigin<AccountId>, O>> + From<RawOrigin<AccountId>>,
-	Who: Contains<AccountId>,
+	Who: SortedMembers<AccountId>,
 	AccountId: PartialEq + Clone + Ord + Default,
 > EnsureOrigin<O> for EnsureSignedBy<Who, AccountId> {
 	type Success = AccountId;
@@ -1277,7 +1298,7 @@ pub enum IncRefError {
 	NoProviders,
 }
 
-impl<T: Config> Module<T> {
+impl<T: Config> Pallet<T> {
 	pub fn account_exists(who: &T::AccountId) -> bool {
 		Account::<T>::contains_key(who)
 	}
@@ -1338,7 +1359,7 @@ impl<T: Config> Module<T> {
 					(1, 0, 0) => {
 						// No providers left (and no consumers) and no sufficients. Account dead.
 
-						Module::<T>::on_killed_account(who.clone());
+						Pallet::<T>::on_killed_account(who.clone());
 						Ok(DecRefStatus::Reaped)
 					}
 					(1, c, _) if c > 0 => {
@@ -1391,7 +1412,7 @@ impl<T: Config> Module<T> {
 				}
 				match (account.sufficients, account.providers) {
 					(0, 0) | (1, 0) => {
-						Module::<T>::on_killed_account(who.clone());
+						Pallet::<T>::on_killed_account(who.clone());
 						DecRefStatus::Reaped
 					}
 					(x, _) => {
@@ -1456,9 +1477,20 @@ impl<T: Config> Module<T> {
 		Account::<T>::get(who).consumers
 	}
 
-	/// True if the account has some outstanding references.
+	/// True if the account has some outstanding consumer references.
 	pub fn is_provider_required(who: &T::AccountId) -> bool {
 		Account::<T>::get(who).consumers != 0
+	}
+
+	/// True if the account has no outstanding consumer references or more than one provider.
+	pub fn can_dec_provider(who: &T::AccountId) -> bool {
+		let a = Account::<T>::get(who);
+		a.consumers == 0 || a.providers > 1
+	}
+
+	/// True if the account has at least one provider reference.
+	pub fn can_inc_consumer(who: &T::AccountId) -> bool {
+		Account::<T>::get(who).providers > 0
 	}
 
 	/// Deposits an event into this block's event record.
@@ -1705,9 +1737,9 @@ impl<T: Config> Module<T> {
 				Ok(_) => Event::ExtrinsicSuccess(info),
 				Err(err) => {
 					log::trace!(
-						target: "runtime::system", 
-						"Extrinsic failed at block({:?}): {:?}", 
-						Self::block_number(), 
+						target: "runtime::system",
+						"Extrinsic failed at block({:?}): {:?}",
+						Self::block_number(),
 						err,
 					);
 					Event::ExtrinsicFailed(err.error, info)
@@ -1775,11 +1807,11 @@ impl<T: Config> Module<T> {
 pub struct Provider<T>(PhantomData<T>);
 impl<T: Config> HandleLifetime<T::AccountId> for Provider<T> {
 	fn created(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::inc_providers(t);
+		Pallet::<T>::inc_providers(t);
 		Ok(())
 	}
 	fn killed(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::dec_providers(t)
+		Pallet::<T>::dec_providers(t)
 			.map(|_| ())
 			.or_else(|e| match e {
 				DecRefError::ConsumerRemaining => Err(StoredMapError::ConsumerRemaining),
@@ -1791,11 +1823,11 @@ impl<T: Config> HandleLifetime<T::AccountId> for Provider<T> {
 pub struct SelfSufficient<T>(PhantomData<T>);
 impl<T: Config> HandleLifetime<T::AccountId> for SelfSufficient<T> {
 	fn created(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::inc_sufficients(t);
+		Pallet::<T>::inc_sufficients(t);
 		Ok(())
 	}
 	fn killed(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::dec_sufficients(t);
+		Pallet::<T>::dec_sufficients(t);
 		Ok(())
 	}
 }
@@ -1804,13 +1836,13 @@ impl<T: Config> HandleLifetime<T::AccountId> for SelfSufficient<T> {
 pub struct Consumer<T>(PhantomData<T>);
 impl<T: Config> HandleLifetime<T::AccountId> for Consumer<T> {
 	fn created(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::inc_consumers(t)
+		Pallet::<T>::inc_consumers(t)
 			.map_err(|e| match e {
 				IncRefError::NoProviders => StoredMapError::NoProviders
 			})
 	}
 	fn killed(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::dec_consumers(t);
+		Pallet::<T>::dec_consumers(t);
 		Ok(())
 	}
 }

@@ -52,9 +52,9 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic
 	{
-		System: frame_system::{Module, Call, Event<T>, Config},
-		Balances: pallet_balances::{Module, Call, Event<T>, Config<T>},
-		MultiPhase: multi_phase::{Module, Call, Event<T>},
+		System: frame_system::{Pallet, Call, Event<T>, Config},
+		Balances: pallet_balances::{Pallet, Call, Event<T>, Config<T>},
+		MultiPhase: multi_phase::{Pallet, Call, Event<T>},
 	}
 );
 
@@ -65,7 +65,7 @@ pub(crate) type TargetIndex = u16;
 
 sp_npos_elections::generate_solution_type!(
 	#[compact]
-	pub struct TestCompact::<VoterIndex, TargetIndex, PerU16>(16)
+	pub struct TestCompact::<VoterIndex = VoterIndex, TargetIndex = TargetIndex, Accuracy = PerU16>(16)
 );
 
 /// All events of this pallet.
@@ -161,6 +161,7 @@ impl frame_system::Config for Runtime {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
+	type OnSetCode = ();
 }
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
@@ -204,6 +205,7 @@ parameter_types! {
 	pub static MinerTxPriority: u64 = 100;
 	pub static SolutionImprovementThreshold: Perbill = Perbill::zero();
 	pub static MinerMaxWeight: Weight = BlockWeights::get().max_block;
+	pub static MinerMaxLength: u32 = 256;
 	pub static MockWeightInfo: bool = false;
 
 
@@ -276,6 +278,7 @@ impl crate::Config for Runtime {
 	type SolutionImprovementThreshold = SolutionImprovementThreshold;
 	type MinerMaxIterations = MinerMaxIterations;
 	type MinerMaxWeight = MinerMaxWeight;
+	type MinerMaxLength = MinerMaxLength;
 	type MinerTxPriority = MinerTxPriority;
 	type DataProvider = StakingMock;
 	type WeightInfo = DualMockWeightInfo;
@@ -300,6 +303,7 @@ pub struct ExtBuilder {}
 
 pub struct StakingMock;
 impl ElectionDataProvider<AccountId, u64> for StakingMock {
+	const MAXIMUM_VOTES_PER_VOTER: u32 = <TestCompact as CompactSolution>::LIMIT as u32;
 	fn targets(maybe_max_len: Option<usize>) -> data_provider::Result<(Vec<AccountId>, Weight)> {
 		let targets = Targets::get();
 
