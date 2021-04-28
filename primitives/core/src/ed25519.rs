@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +25,6 @@ use sp_std::vec::Vec;
 use crate::{hash::H256, hash::H512};
 use codec::{Encode, Decode};
 
-#[cfg(feature = "full_crypto")]
-use blake2_rfc;
 #[cfg(feature = "full_crypto")]
 use core::convert::TryFrom;
 #[cfg(feature = "full_crypto")]
@@ -335,15 +333,19 @@ pub struct LocalizedSignature {
 
 /// An error type for SS58 decoding.
 #[cfg(feature = "std")]
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, thiserror::Error)]
 pub enum PublicError {
 	/// Bad alphabet.
+	#[error("Base 58 requirement is violated")]
 	BadBase58,
 	/// Bad length.
+	#[error("Length is bad")]
 	BadLength,
 	/// Unknown version.
+	#[error("Unknown version")]
 	UnknownVersion,
 	/// Invalid checksum.
+	#[error("Invalid checksum")]
 	InvalidChecksum,
 }
 

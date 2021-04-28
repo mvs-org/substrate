@@ -86,9 +86,9 @@ spec:
         ports:
         - containerPort: 30333
           name: p2p
-        - containerPort: 9933
+        - containerPort: 8830
           name: http-rpc
-        - containerPort: 9944
+        - containerPort: 8831
           name: websocket-rpc
         command: ["/bin/sh"]
         args:

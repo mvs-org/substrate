@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -162,7 +162,7 @@ impl<
 		iterator
 	}
 
-	fn translate<O: Decode, F: Fn(K, O) -> Option<V>>(f: F) {
+	fn translate<O: Decode, F: FnMut(K, O) -> Option<V>>(mut f: F) {
 		let prefix = G::prefix_hash();
 		let mut previous_key = prefix.clone();
 		let mut count = 0;
@@ -174,7 +174,11 @@ impl<
 			let value = match unhashed::get::<O>(&previous_key) {
 				Some(value) => value,
 				None => {
+<<<<<<< HEAD
 					crate::debug::error!("Invalid translate: fail to decode old value {}", count);
+=======
+					log::error!("Invalid translate: fail to decode old value");
+>>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 					continue
 				},
 			};
@@ -183,7 +187,11 @@ impl<
 			let key = match K::decode(&mut key_material) {
 				Ok(key) => key,
 				Err(_) => {
+<<<<<<< HEAD
 					crate::debug::error!("Invalid translate: fail to decode key {}", count);
+=======
+					log::error!("Invalid translate: fail to decode key");
+>>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 					continue
 				},
 			};
@@ -226,6 +234,10 @@ impl<K: FullEncode, V: FullCodec, G: StorageMap<K, V>> storage::StorageMap<K, V>
 
 	fn get<KeyArg: EncodeLike<K>>(key: KeyArg) -> Self::Query {
 		G::from_optional_value_to_query(unhashed::get(Self::storage_map_final_key(key).as_ref()))
+	}
+
+	fn try_get<KeyArg: EncodeLike<K>>(key: KeyArg) -> Result<V, ()> {
+		unhashed::get(Self::storage_map_final_key(key).as_ref()).ok_or(())
 	}
 
 	fn insert<KeyArg: EncodeLike<K>, ValArg: EncodeLike<V>>(key: KeyArg, val: ValArg) {
@@ -327,20 +339,22 @@ mod test_iterators {
 		storage::{generator::StorageMap, IterableStorageMap, unhashed},
 	};
 
-	pub trait Trait {
+	pub trait Config: 'static {
 		type Origin;
 		type BlockNumber;
+		type PalletInfo: crate::traits::PalletInfo;
+		type DbWeight: crate::traits::Get<crate::weights::RuntimeDbWeight>;
 	}
 
 	crate::decl_module! {
-		pub struct Module<T: Trait> for enum Call where origin: T::Origin {}
+		pub struct Module<T: Config> for enum Call where origin: T::Origin, system=self {}
 	}
 
 	#[derive(PartialEq, Eq, Clone, Encode, Decode)]
 	struct NoDef(u32);
 
 	crate::decl_storage! {
-		trait Store for Module<T: Trait> as Test {
+		trait Store for Module<T: Config> as Test {
 			Map: map hasher(blake2_128_concat) u16 => u64;
 		}
 	}

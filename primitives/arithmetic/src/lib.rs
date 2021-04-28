@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,13 +36,13 @@ macro_rules! assert_eq_error_rate {
 pub mod biguint;
 pub mod helpers_128bit;
 pub mod traits;
-mod per_things;
-mod fixed_point;
-mod rational128;
+pub mod per_things;
+pub mod fixed_point;
+pub mod rational;
 
 pub use fixed_point::{FixedPointNumber, FixedPointOperand, FixedI64, FixedI128, FixedU128};
 pub use per_things::{PerThing, InnerOf, UpperOf, Percent, PerU16, Permill, Perbill, Perquintill};
-pub use rational128::Rational128;
+pub use rational::{Rational128, RationalInfinite};
 
 use sp_std::{prelude::*, cmp::Ordering, fmt::Debug, convert::TryInto};
 use traits::{BaseArithmetic, One, Zero, SaturatedConversion, Unsigned};
@@ -114,12 +114,18 @@ impl_normalize_for_numeric!(u8, u16, u32, u64, u128);
 
 impl<P: PerThing> Normalizable<P> for Vec<P> {
 	fn normalize(&self, targeted_sum: P) -> Result<Vec<P>, &'static str> {
-		let inners = self.iter().map(|p| p.clone().deconstruct().into()).collect::<Vec<_>>();
-		let normalized = normalize(inners.as_ref(), targeted_sum.deconstruct().into())?;
-		Ok(normalized.into_iter().map(|i: UpperOf<P>| P::from_parts(i.saturated_into())).collect())
+		let uppers =
+			self.iter().map(|p| <UpperOf<P>>::from(p.clone().deconstruct())).collect::<Vec<_>>();
+
+		let normalized =
+			normalize(uppers.as_ref(), <UpperOf<P>>::from(targeted_sum.deconstruct()))?;
+
+		Ok(normalized
+			.into_iter()
+			.map(|i: UpperOf<P>| P::from_parts(i.saturated_into::<P::Inner>()))
+			.collect())
 	}
 }
-
 
 /// Normalize `input` so that the sum of all elements reaches `targeted_sum`.
 ///
@@ -143,8 +149,8 @@ impl<P: PerThing> Normalizable<P> for Vec<P> {
 /// `leftover` value. This ensures that the result will always stay accurate, yet it might cause the
 /// execution to become increasingly slow, since leftovers are applied one by one.
 ///
-/// All in all, the complicated case above is rare to happen in all substrate use cases, hence we
-/// opt for it due to its simplicity.
+/// All in all, the complicated case above is rare to happen in most use cases within this repo ,
+/// hence we opt for it due to its simplicity.
 ///
 /// This function will return an error is if length of `input` cannot fit in `T`, or if `sum(input)`
 /// cannot fit inside `T`.
@@ -197,7 +203,7 @@ pub fn normalize<T>(input: &[T], targeted_sum: T) -> Result<Vec<T>, &'static str
 					.expect("Proof provided in the module doc; qed.");
 				if output_with_idx[min_index].1 >= threshold {
 					min_index += 1;
-					min_index = min_index % count;
+					min_index %= count;
 				}
 			}
 		}
@@ -209,7 +215,7 @@ pub fn normalize<T>(input: &[T], targeted_sum: T) -> Result<Vec<T>, &'static str
 				.expect("Proof provided in the module doc; qed.");
 			if output_with_idx[min_index].1 >= threshold {
 				min_index += 1;
-				min_index = min_index % count;
+				min_index %= count;
 			}
 			leftover -= One::one()
 		}
@@ -488,7 +494,7 @@ mod threshold_compare_tests {
 	fn peru16_rational_does_not_overflow() {
 		// A historical example that will panic only for per_thing type that are created with
 		// maximum capacity of their type, e.g. PerU16.
-		let _ = PerU16::from_rational_approximation(17424870u32, 17424870);
+		let _ = PerU16::from_rational(17424870u32, 17424870);
 	}
 
 	#[test]

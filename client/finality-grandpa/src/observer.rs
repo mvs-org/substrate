@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2018-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2018-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -26,9 +26,10 @@ use finality_grandpa::{
 	BlockNumberOps, Error as GrandpaError, voter, voter_set::VoterSet
 };
 use log::{debug, info, warn};
-use sp_core::traits::BareCryptoStorePtr;
+use sp_keystore::SyncCryptoStorePtr;
 use sp_consensus::SelectChain;
 use sc_client_api::backend::Backend;
+use sc_telemetry::TelemetryHandle;
 use sp_utils::mpsc::TracingUnboundedReceiver;
 use sp_runtime::traits::{NumberFor, Block as BlockT};
 use sp_blockchain::HeaderMetadata;
@@ -39,7 +40,6 @@ use crate::{
 };
 use crate::authorities::SharedAuthoritySet;
 use crate::communication::{Network as NetworkT, NetworkBridge};
-use crate::consensus_changes::SharedConsensusChanges;
 use crate::notification::GrandpaJustificationSender;
 use sp_finality_grandpa::AuthorityId;
 use std::marker::{PhantomData, Unpin};
@@ -58,22 +58,17 @@ impl<'a, Block, Client> finality_grandpa::Chain<Block::Hash, NumberFor<Block>>
 	fn ancestry(&self, base: Block::Hash, block: Block::Hash) -> Result<Vec<Block::Hash>, GrandpaError> {
 		environment::ancestry(&self.client, base, block)
 	}
-
-	fn best_chain_containing(&self, _block: Block::Hash) -> Option<(Block::Hash, NumberFor<Block>)> {
-		// only used by voter
-		None
-	}
 }
 
 fn grandpa_observer<BE, Block: BlockT, Client, S, F>(
 	client: &Arc<Client>,
 	authority_set: &SharedAuthoritySet<Block::Hash, NumberFor<Block>>,
-	consensus_changes: &SharedConsensusChanges<Block::Hash, NumberFor<Block>>,
 	voters: &Arc<VoterSet<AuthorityId>>,
 	justification_sender: &Option<GrandpaJustificationSender<Block>>,
 	last_finalized_number: NumberFor<Block>,
 	commits: S,
 	note_round: F,
+	telemetry: Option<TelemetryHandle>,
 ) -> impl Future<Output = Result<(), CommandOrError<Block::Hash, NumberFor<Block>>>>
 where
 	NumberFor<Block>: BlockNumberOps,
@@ -83,7 +78,6 @@ where
 	Client: crate::ClientForGrandpa<Block, BE>,
 {
 	let authority_set = authority_set.clone();
-	let consensus_changes = consensus_changes.clone();
 	let client = client.clone();
 	let voters = voters.clone();
 	let justification_sender = justification_sender.clone();
@@ -123,13 +117,13 @@ where
 			match environment::finalize_block(
 				client.clone(),
 				&authority_set,
-				&consensus_changes,
 				None,
 				finalized_hash,
 				finalized_number,
 				(round, commit).into(),
 				false,
 				justification_sender.as_ref(),
+				telemetry.clone(),
 			) {
 				Ok(_) => {},
 				Err(e) => return future::err(e),
@@ -181,7 +175,8 @@ where
 		persistent_data,
 		voter_commands_rx,
 		justification_sender,
-		..
+		justification_stream: _,
+		telemetry,
 	} = link;
 
 	let network = NetworkBridge::new(
@@ -189,15 +184,17 @@ where
 		config.clone(),
 		persistent_data.set_state.clone(),
 		None,
+		telemetry.clone(),
 	);
 
 	let observer_work = ObserverWork::new(
-		client,
+		client.clone(),
 		network,
 		persistent_data,
 		config.keystore,
 		voter_commands_rx,
 		Some(justification_sender),
+		telemetry.clone(),
 	);
 
 	let observer_work = observer_work
@@ -216,9 +213,10 @@ struct ObserverWork<B: BlockT, BE, Client, N: NetworkT<B>> {
 	client: Arc<Client>,
 	network: NetworkBridge<B, N>,
 	persistent_data: PersistentData<B>,
-	keystore: Option<BareCryptoStorePtr>,
+	keystore: Option<SyncCryptoStorePtr>,
 	voter_commands_rx: TracingUnboundedReceiver<VoterCommand<B::Hash, NumberFor<B>>>,
 	justification_sender: Option<GrandpaJustificationSender<B>>,
+	telemetry: Option<TelemetryHandle>,
 	_phantom: PhantomData<BE>,
 }
 
@@ -234,9 +232,10 @@ where
 		client: Arc<Client>,
 		network: NetworkBridge<B, Network>,
 		persistent_data: PersistentData<B>,
-		keystore: Option<BareCryptoStorePtr>,
+		keystore: Option<SyncCryptoStorePtr>,
 		voter_commands_rx: TracingUnboundedReceiver<VoterCommand<B::Hash, NumberFor<B>>>,
 		justification_sender: Option<GrandpaJustificationSender<B>>,
+		telemetry: Option<TelemetryHandle>,
 	) -> Self {
 
 		let mut work = ObserverWork {
@@ -249,6 +248,7 @@ where
 			keystore: keystore.clone(),
 			voter_commands_rx,
 			justification_sender,
+			telemetry,
 			_phantom: PhantomData,
 		};
 		work.rebuild_observer();
@@ -293,12 +293,12 @@ where
 		let observer = grandpa_observer(
 			&self.client,
 			&self.persistent_data.authority_set,
-			&self.persistent_data.consensus_changes,
 			&voters,
 			&self.justification_sender,
 			last_finalized_number,
 			global_in,
 			note_round,
+			self.telemetry.clone(),
 		);
 
 		self.observer = Box::pin(observer);
@@ -438,6 +438,7 @@ mod tests {
 			persistent_data,
 			None,
 			voter_command_rx,
+			None,
 			None,
 		);
 

@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,7 +38,7 @@ fn main() {
 	sp_tracing::try_init_simple();
 
 	rt::run(rt::lazy(|| {
-		let uri = "http://localhost:9933";
+		let uri = "http://localhost:8830";
 
 		http::connect(uri)
 			.and_then(|client: AuthorClient<Hash, Hash>| {

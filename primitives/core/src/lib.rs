@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,8 +72,6 @@ mod changes_trie;
 #[cfg(feature = "std")]
 pub mod traits;
 pub mod testing;
-#[cfg(feature = "std")]
-pub mod vrf;
 
 pub use self::hash::{H160, H256, H512, convert_hash};
 pub use self::uint::{U256, U512};
@@ -121,9 +119,10 @@ impl ExecutionContext {
 		match self {
 			Importing | Syncing | BlockConstruction =>
 				offchain::Capabilities::none(),
-			// Enable keystore and transaction pool by default for offchain calls.
+			// Enable keystore, transaction pool and Offchain DB reads by default for offchain calls.
 			OffchainCall(None) => [
 				offchain::Capability::Keystore,
+				offchain::Capability::OffchainDbRead,
 				offchain::Capability::TransactionPool,
 			][..].into(),
 			OffchainCall(Some((_, capabilities))) => *capabilities,
@@ -196,6 +195,13 @@ pub enum NativeOrEncoded<R> {
 	Native(R),
 	/// The encoded representation.
 	Encoded(Vec<u8>)
+}
+
+#[cfg(feature = "std")]
+impl<R> From<R> for NativeOrEncoded<R> {
+	fn from(val: R) -> Self {
+		Self::Native(val)
+	}
 }
 
 #[cfg(feature = "std")]
