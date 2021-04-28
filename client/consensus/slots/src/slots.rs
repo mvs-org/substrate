@@ -22,9 +22,10 @@
 
 use super::{SlotCompatible, Slot};
 use sp_consensus::Error;
+use futures::{prelude::*, task::Context, task::Poll};
 use sp_inherents::{InherentData, InherentDataProviders};
 
-use std::time::{Duration, Instant};
+use std::{pin::Pin, time::{Duration, Instant}};
 use futures_timer::Delay;
 
 /// Returns current duration since unix epoch.
@@ -51,39 +52,13 @@ pub struct SlotInfo {
 	/// The slot number.
 	pub slot: Slot,
 	/// Current timestamp.
-	pub timestamp: sp_timestamp::Timestamp,
+	pub timestamp: u64,
 	/// The instant at which the slot ends.
 	pub ends_at: Instant,
 	/// The inherent data.
 	pub inherent_data: InherentData,
 	/// Slot duration.
 	pub duration: Duration,
-	/// Some potential block size limit for the block to be authored at this slot.
-	///
-	/// For more information see [`Proposer::propose`](sp_consensus::Proposer::propose).
-	pub block_size_limit: Option<usize>,
-}
-
-impl SlotInfo {
-	/// Create a new [`SlotInfo`].
-	///
-	/// `ends_at` is calculated using `timestamp` and `duration`.
-	pub fn new(
-		slot: Slot,
-		timestamp: sp_timestamp::Timestamp,
-		inherent_data: InherentData,
-		duration: Duration,
-		block_size_limit: Option<usize>,
-	) -> Self {
-		Self {
-			slot,
-			timestamp,
-			inherent_data,
-			duration,
-			block_size_limit,
-			ends_at: Instant::now() + time_until_next(timestamp.as_duration(), duration),
-		}
-	}
 }
 
 /// A stream that returns every time there is a new slot.
@@ -98,13 +73,13 @@ pub(crate) struct Slots<SC> {
 impl<SC> Slots<SC> {
 	/// Create a new `Slots` stream.
 	pub fn new(
-		slot_duration: Duration,
+		slot_duration: u64,
 		inherent_data_providers: InherentDataProviders,
 		timestamp_extractor: SC,
 	) -> Self {
 		Slots {
 			last_slot: 0.into(),
-			slot_duration,
+			slot_duration: Duration::from_millis(slot_duration),
 			inner_delay: None,
 			inherent_data_providers,
 			timestamp_extractor,
@@ -112,47 +87,59 @@ impl<SC> Slots<SC> {
 	}
 }
 
-impl<SC: SlotCompatible> Slots<SC> {
-	/// Returns a future that fires when the next slot starts.
-	pub async fn next_slot(&mut self) -> Result<SlotInfo, Error> {
+impl<SC: SlotCompatible> Stream for Slots<SC> {
+	type Item = Result<SlotInfo, Error>;
+
+	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
 		loop {
+			let slot_duration = self.slot_duration;
 			self.inner_delay = match self.inner_delay.take() {
 				None => {
 					// schedule wait.
-					let wait_dur = time_until_next(duration_now(), self.slot_duration);
+					let wait_dur = time_until_next(duration_now(), slot_duration);
 					Some(Delay::new(wait_dur))
 				}
 				Some(d) => Some(d),
 			};
 
-			if let Some(inner_delay) = self.inner_delay.take() {
-				inner_delay.await;
+			if let Some(ref mut inner_delay) = self.inner_delay {
+				match Future::poll(Pin::new(inner_delay), cx) {
+					Poll::Pending => return Poll::Pending,
+					Poll::Ready(()) => {}
+				}
 			}
+
 			// timeout has fired.
 
 			let inherent_data = match self.inherent_data_providers.create_inherent_data() {
 				Ok(id) => id,
-				Err(err) => return Err(sp_consensus::Error::InherentData(err)),
+				Err(err) => return Poll::Ready(Some(Err(sp_consensus::Error::InherentData(err)))),
 			};
 			let result = self.timestamp_extractor.extract_timestamp_and_slot(&inherent_data);
-			let (timestamp, slot, offset) = result?;
+			let (timestamp, slot, offset) = match result {
+				Ok(v) => v,
+				Err(err) => return Poll::Ready(Some(Err(err))),
+			};
 			// reschedule delay for next slot.
 			let ends_in = offset +
-				time_until_next(timestamp.as_duration(), self.slot_duration);
+				time_until_next(Duration::from_millis(timestamp), slot_duration);
+			let ends_at = Instant::now() + ends_in;
 			self.inner_delay = Some(Delay::new(ends_in));
 
 			// never yield the same slot twice.
 			if slot > self.last_slot {
 				self.last_slot = slot;
 
-				break Ok(SlotInfo::new(
+				break Poll::Ready(Some(Ok(SlotInfo {
 					slot,
+					duration: self.slot_duration,
 					timestamp,
+					ends_at,
 					inherent_data,
-					self.slot_duration,
-					None,
-				))
+				})))
 			}
 		}
 	}
 }
+
+impl<SC> Unpin for Slots<SC> {}

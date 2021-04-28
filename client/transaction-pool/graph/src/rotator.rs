@@ -48,7 +48,7 @@ pub struct PoolRotator<Hash> {
 
 impl<Hash: hash::Hash + Eq> Default for PoolRotator<Hash> {
 	fn default() -> Self {
-		Self {
+		PoolRotator {
 			ban_time: Duration::from_secs(60 * 30),
 			banned_until: Default::default(),
 		}
@@ -77,6 +77,7 @@ impl<Hash: hash::Hash + Eq + Clone> PoolRotator<Hash> {
 			}
 		}
 	}
+
 
 	/// Bans extrinsic if it's stale.
 	///

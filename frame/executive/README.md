@@ -35,7 +35,7 @@ The default Substrate node template declares the [`Executive`](https://docs.rs/f
 ```rust
 #
 /// Executive: handles dispatch to the various modules.
-pub type Executive = executive::Executive<Runtime, Block, Context, Runtime, AllPallets>;
+pub type Executive = executive::Executive<Runtime, Block, Context, Runtime, AllModules>;
 ```
 
 ### Custom `OnRuntimeUpgrade` logic
@@ -54,7 +54,7 @@ impl frame_support::traits::OnRuntimeUpgrade for CustomOnRuntimeUpgrade {
     }
 }
 
-pub type Executive = executive::Executive<Runtime, Block, Context, Runtime, AllPallets, CustomOnRuntimeUpgrade>;
+pub type Executive = executive::Executive<Runtime, Block, Context, Runtime, AllModules, CustomOnRuntimeUpgrade>;
 ```
 
 License: Apache-2.0

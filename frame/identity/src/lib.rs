@@ -17,8 +17,8 @@
 
 //! # Identity Module
 //!
-//! - [`Config`]
-//! - [`Call`]
+//! - [`identity::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
 //!
 //! ## Overview
 //!
@@ -91,38 +91,8 @@ use frame_support::{
 use frame_system::ensure_signed;
 pub use weights::WeightInfo;
 
-<<<<<<< HEAD
-#[cfg(test)]
-mod tests;
-mod benchmarking;
-mod default_weights;
-pub mod migration;
-
-pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
-type NegativeImbalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::NegativeImbalance;
-
-pub trait WeightInfo {
-	fn add_registrar(r: u32, ) -> Weight;
-	fn set_identity(r: u32, x: u32, ) -> Weight;
-	fn set_subs_new(s: u32, ) -> Weight;
-	fn set_subs_old(p: u32, ) -> Weight;
-	fn add_sub(p: u32, ) -> Weight;
-	fn rename_sub(p: u32, ) -> Weight;
-	fn remove_sub(p: u32, ) -> Weight;
-	fn quit_sub(p: u32, ) -> Weight;
-	fn clear_identity(r: u32, s: u32, x: u32, ) -> Weight;
-	fn request_judgement(r: u32, x: u32, ) -> Weight;
-	fn cancel_request(r: u32, x: u32, ) -> Weight;
-	fn set_fee(r: u32, ) -> Weight;
-	fn set_account_id(r: u32, ) -> Weight;
-	fn set_fields(r: u32, ) -> Weight;
-	fn provide_judgement(r: u32, x: u32, ) -> Weight;
-	fn kill_identity(r: u32, s: u32, x: u32, ) -> Weight;
-}
-=======
 type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 type NegativeImbalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::NegativeImbalance;
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 
 pub trait Config: frame_system::Config {
 	/// The overarching event type.
@@ -628,8 +598,7 @@ decl_module! {
 				T::Currency::reserve(&sender, id.deposit - old_deposit)?;
 			}
 			if old_deposit > id.deposit {
-				let err_amount = T::Currency::unreserve(&sender, old_deposit - id.deposit);
-				debug_assert!(err_amount.is_zero());
+				let _ = T::Currency::unreserve(&sender, old_deposit - id.deposit);
 			}
 
 			let judgements = id.judgements.len();
@@ -686,8 +655,7 @@ decl_module! {
 			if old_deposit < new_deposit {
 				T::Currency::reserve(&sender, new_deposit - old_deposit)?;
 			} else if old_deposit > new_deposit {
-				let err_amount = T::Currency::unreserve(&sender, old_deposit - new_deposit);
-				debug_assert!(err_amount.is_zero());
+				let _ = T::Currency::unreserve(&sender, old_deposit - new_deposit);
 			}
 			// do nothing if they're equal.
 
@@ -745,8 +713,7 @@ decl_module! {
 				<SuperOf<T>>::remove(sub);
 			}
 
-			let err_amount = T::Currency::unreserve(&sender, deposit.clone());
-			debug_assert!(err_amount.is_zero());
+			let _ = T::Currency::unreserve(&sender, deposit.clone());
 
 			Self::deposit_event(RawEvent::IdentityCleared(sender, deposit));
 
@@ -852,8 +819,7 @@ decl_module! {
 				Err(Error::<T>::JudgementGiven)?
 			};
 
-			let err_amount = T::Currency::unreserve(&sender, fee);
-			debug_assert!(err_amount.is_zero());
+			let _ = T::Currency::unreserve(&sender, fee);
 			let judgements = id.judgements.len();
 			let extra_fields = id.info.additional.len();
 			<IdentityOf<T>>::insert(&sender, id);
@@ -1129,8 +1095,7 @@ decl_module! {
 				sub_ids.retain(|x| x != &sub);
 				let deposit = T::SubAccountDeposit::get().min(*subs_deposit);
 				*subs_deposit -= deposit;
-				let err_amount = T::Currency::unreserve(&sender, deposit);
-				debug_assert!(err_amount.is_zero());
+				let _ = T::Currency::unreserve(&sender, deposit);
 				Self::deposit_event(RawEvent::SubIdentityRemoved(sub, sender, deposit));
 			});
 		}

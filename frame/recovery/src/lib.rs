@@ -17,8 +17,8 @@
 
 //! # Recovery Pallet
 //!
-//! - [`Config`]
-//! - [`Call`]
+//! - [`recovery::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
 //!
 //! ## Overview
 //!
@@ -161,7 +161,7 @@ use codec::{Encode, Decode};
 use frame_support::{
 	decl_module, decl_event, decl_storage, decl_error, ensure,
 	Parameter, RuntimeDebug, weights::GetDispatchInfo,
-	traits::{Currency, ReservableCurrency, Get, BalanceStatus, MigrateAccount},
+	traits::{Currency, ReservableCurrency, Get, BalanceStatus},
 	dispatch::PostDispatchInfo,
 };
 use frame_system::{self as system, ensure_signed, ensure_root};
@@ -256,13 +256,6 @@ decl_storage! {
 		/// Map from the user who can access it to the recovered account.
 		pub Proxy get(fn proxy):
 			map hasher(blake2_128_concat) T::AccountId => Option<T::AccountId>;
-	}
-}
-
-impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
-	fn migrate_account(a: &T::AccountId) {
-		Recoverable::<T>::migrate_key_from_blake(a);
-		Proxy::<T>::migrate_key_from_blake(a);
 	}
 }
 
@@ -503,7 +496,7 @@ decl_module! {
 			T::Currency::reserve(&who, recovery_deposit)?;
 			// Create an active recovery status
 			let recovery_status = ActiveRecovery {
-				created: <system::Pallet<T>>::block_number(),
+				created: <system::Module<T>>::block_number(),
 				deposit: recovery_deposit,
 				friends: vec![],
 			};
@@ -585,7 +578,7 @@ decl_module! {
 			let active_recovery = Self::active_recovery(&account, &who).ok_or(Error::<T>::NotStarted)?;
 			ensure!(!Proxy::<T>::contains_key(&who), Error::<T>::AlreadyProxy);
 			// Make sure the delay period has passed
-			let current_block_number = <system::Pallet<T>>::block_number();
+			let current_block_number = <system::Module<T>>::block_number();
 			let recoverable_block_number = active_recovery.created
 				.checked_add(&recovery_config.delay_period)
 				.ok_or(Error::<T>::Overflow)?;
@@ -595,7 +588,7 @@ decl_module! {
 				recovery_config.threshold as usize <= active_recovery.friends.len(),
 				Error::<T>::Threshold
 			);
-			system::Pallet::<T>::inc_consumers(&who).map_err(|_| Error::<T>::BadState)?;
+			system::Module::<T>::inc_consumers(&who).map_err(|_| Error::<T>::BadState)?;
 			// Create the recovery storage item
 			Proxy::<T>::insert(&who, &account);
 			Self::deposit_event(RawEvent::AccountRecovered(account, who));
@@ -628,8 +621,7 @@ decl_module! {
 			let active_recovery = <ActiveRecoveries<T>>::take(&who, &rescuer).ok_or(Error::<T>::NotStarted)?;
 			// Move the reserved funds from the rescuer to the rescued account.
 			// Acts like a slashing mechanism for those who try to maliciously recover accounts.
-			let res = T::Currency::repatriate_reserved(&rescuer, &who, active_recovery.deposit, BalanceStatus::Free);
-			debug_assert!(res.is_ok());
+			let _ = T::Currency::repatriate_reserved(&rescuer, &who, active_recovery.deposit, BalanceStatus::Free);
 			Self::deposit_event(RawEvent::RecoveryClosed(who, rescuer));
 		}
 
@@ -685,7 +677,7 @@ decl_module! {
 			// Check `who` is allowed to make a call on behalf of `account`
 			ensure!(Self::proxy(&who) == Some(account), Error::<T>::NotAllowed);
 			Proxy::<T>::remove(&who);
-			system::Pallet::<T>::dec_consumers(&who);
+			system::Module::<T>::dec_consumers(&who);
 		}
 	}
 }

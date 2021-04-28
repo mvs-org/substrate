@@ -19,9 +19,7 @@ use crate::*;
 use mock::{*, Origin};
 use sp_core::H256;
 use sp_runtime::{DispatchError, DispatchErrorWithPostInfo, traits::{Header, BlakeTwo256}};
-use frame_support::{
-	assert_noop, assert_ok, weights::WithPostDispatchInfo, dispatch::PostDispatchInfo
-};
+use frame_support::{assert_noop, weights::WithPostDispatchInfo, dispatch::PostDispatchInfo};
 
 #[test]
 fn origin_works() {
@@ -33,7 +31,7 @@ fn origin_works() {
 #[test]
 fn stored_map_works() {
 	new_test_ext().execute_with(|| {
-		assert_ok!(System::insert(&0, 42));
+		assert!(System::insert(&0, 42).is_ok());
 		assert!(!System::is_provider_required(&0));
 
 		assert_eq!(Account::<Test>::get(0), AccountInfo {
@@ -44,17 +42,17 @@ fn stored_map_works() {
 			data: 42,
 		});
 
-		assert_ok!(System::inc_consumers(&0));
+		assert!(System::inc_consumers(&0).is_ok());
 		assert!(System::is_provider_required(&0));
 
-		assert_ok!(System::insert(&0, 69));
+		assert!(System::insert(&0, 69).is_ok());
 		assert!(System::is_provider_required(&0));
 
 		System::dec_consumers(&0);
 		assert!(!System::is_provider_required(&0));
 
 		assert!(KILLED.with(|r| r.borrow().is_empty()));
-		assert_ok!(System::remove(&0));
+		assert!(System::remove(&0).is_ok());
 		assert_eq!(KILLED.with(|r| r.borrow().clone()), vec![0u64]);
 	});
 }
@@ -124,7 +122,7 @@ fn sufficient_cannot_support_consumer() {
 		assert_noop!(System::inc_consumers(&0), IncRefError::NoProviders);
 
 		assert_eq!(System::inc_providers(&0), IncRefStatus::Existed);
-		assert_ok!(System::inc_consumers(&0));
+		assert!(System::inc_consumers(&0).is_ok());
 		assert_noop!(System::dec_providers(&0), DecRefError::ConsumerRemaining);
 	});
 }
@@ -142,7 +140,7 @@ fn provider_required_to_support_consumer() {
 		assert_eq!(System::dec_providers(&0).unwrap(), DecRefStatus::Exists);
 		assert_eq!(System::account_nonce(&0), 1);
 
-		assert_ok!(System::inc_consumers(&0));
+		assert!(System::inc_consumers(&0).is_ok());
 		assert_noop!(System::dec_providers(&0), DecRefError::ConsumerRemaining);
 
 		System::dec_consumers(&0);
@@ -518,7 +516,7 @@ fn ensure_one_of_works() {
 
 	assert_eq!(ensure_root_or_signed(RawOrigin::Root).unwrap(), Either::Left(()));
 	assert_eq!(ensure_root_or_signed(RawOrigin::Signed(0)).unwrap(), Either::Right(0));
-	assert!(ensure_root_or_signed(RawOrigin::None).is_err());
+	assert!(ensure_root_or_signed(RawOrigin::None).is_err())
 }
 
 #[test]

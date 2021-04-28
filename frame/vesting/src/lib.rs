@@ -15,15 +15,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # Vesting Pallet
+//! # Vesting Module
 //!
-//! - [`Config`]
-//! - [`Call`]
+//! - [`vesting::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
 //!
 //! ## Overview
 //!
-//! A simple pallet providing a means of placing a linear curve on an account's locked balance. This
-//! pallet ensures that there is a lock in place preventing the balance to drop below the *unvested*
+//! A simple module providing a means of placing a linear curve on an account's locked balance. This
+//! module ensures that there is a lock in place preventing the balance to drop below the *unvested*
 //! amount for any reason other than transaction fee payment.
 //!
 //! As the amount vested increases over time, the amount unvested reduces. However, locks remain in
@@ -34,13 +34,16 @@
 //!
 //! ## Interface
 //!
-//! This pallet implements the `VestingSchedule` trait.
+//! This module implements the `VestingSchedule` trait.
 //!
 //! ### Dispatchable Functions
 //!
 //! - `vest` - Update the lock, reducing it in line with the amount "vested" so far.
 //! - `vest_other` - Update the lock of another account, reducing it in line with the amount
 //!   "vested" so far.
+//!
+//! [`Call`]: ./enum.Call.html
+//! [`Config`]: ./trait.Config.html
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -50,25 +53,36 @@ pub mod weights;
 use sp_std::prelude::*;
 use sp_std::fmt::Debug;
 use codec::{Encode, Decode};
-use sp_runtime::{RuntimeDebug, traits::{
+use sp_runtime::{DispatchResult, RuntimeDebug, traits::{
 	StaticLookup, Zero, AtLeast32BitUnsigned, MaybeSerializeDeserialize, Convert
 }};
-use frame_support::{ensure, pallet_prelude::*};
+use frame_support::{decl_module, decl_event, decl_storage, decl_error, ensure};
 use frame_support::traits::{
-<<<<<<< HEAD
-	Currency, LockableCurrency, VestingSchedule, WithdrawReason, LockIdentifier,
-	ExistenceRequirement, Get, MigrateAccount,
-=======
 	Currency, LockableCurrency, VestingSchedule, WithdrawReasons, LockIdentifier,
 	ExistenceRequirement, Get,
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 };
-use frame_system::{ensure_signed, ensure_root, pallet_prelude::*};
+use frame_system::{ensure_signed, ensure_root};
 pub use weights::WeightInfo;
-pub use pallet::*;
 
 type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 type MaxLocksOf<T> = <<T as Config>::Currency as LockableCurrency<<T as frame_system::Config>::AccountId>>::MaxLocks;
+
+pub trait Config: frame_system::Config {
+	/// The overarching event type.
+	type Event: From<Event<Self>> + Into<<Self as frame_system::Config>::Event>;
+
+	/// The currency trait.
+	type Currency: LockableCurrency<Self::AccountId>;
+
+	/// Convert the block number into a balance.
+	type BlockNumberToBalance: Convert<Self::BlockNumber, BalanceOf<Self>>;
+
+	/// The minimum amount transferred to call `vested_transfer`.
+	type MinVestedTransfer: Get<BalanceOf<Self>>;
+
+	/// Weight information for extrinsics in this pallet.
+	type WeightInfo: WeightInfo;
+}
 
 const VESTING_ID: LockIdentifier = *b"vesting ";
 
@@ -105,68 +119,23 @@ impl<
 	}
 }
 
-#[frame_support::pallet]
-pub mod pallet {
-	use super::*;
-
-	#[pallet::config]
-	pub trait Config: frame_system::Config {
-		/// The overarching event type.
-		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
-
-		/// The currency trait.
-		type Currency: LockableCurrency<Self::AccountId>;
-
-		/// Convert the block number into a balance.
-		type BlockNumberToBalance: Convert<Self::BlockNumber, BalanceOf<Self>>;
-
-		/// The minimum amount transferred to call `vested_transfer`.
-		#[pallet::constant]
-		type MinVestedTransfer: Get<BalanceOf<Self>>;
-
-		/// Weight information for extrinsics in this pallet.
-		type WeightInfo: WeightInfo;
+decl_storage! {
+	trait Store for Module<T: Config> as Vesting {
+		/// Information regarding the vesting of a given account.
+		pub Vesting get(fn vesting):
+			map hasher(blake2_128_concat) T::AccountId
+			=> Option<VestingInfo<BalanceOf<T>, T::BlockNumber>>;
 	}
-
-	/// Information regarding the vesting of a given account.
-	#[pallet::storage]
-	#[pallet::getter(fn vesting)]
-	pub type Vesting<T: Config> = StorageMap<
-		_,
-		Blake2_128Concat,
-		T::AccountId,
-		VestingInfo<BalanceOf<T>, T::BlockNumber>,
-	>;
-
-	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
-	pub struct Pallet<T>(_);
-
-	#[pallet::genesis_config]
-	pub struct GenesisConfig<T: Config> {
-		pub vesting: Vec<(T::AccountId, T::BlockNumber, T::BlockNumber, BalanceOf<T>)>,
-	}
-
-	#[cfg(feature = "std")]
-	impl<T: Config> Default for GenesisConfig<T> {
-		fn default() -> Self {
-			GenesisConfig {
-				vesting: Default::default(),
-			}
-		}
-	}
-
-	#[pallet::genesis_build]
-	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
-		fn build(&self) {
+	add_extra_genesis {
+		config(vesting): Vec<(T::AccountId, T::BlockNumber, T::BlockNumber, BalanceOf<T>)>;
+		build(|config: &GenesisConfig<T>| {
 			use sp_runtime::traits::Saturating;
-
 			// Generate initial vesting configuration
 			// * who - Account which we are generating vesting configuration for
 			// * begin - Block when the account will start to vest
 			// * length - Number of blocks from `begin` until fully vested
 			// * liquid - Number of units which can be spent before vesting begins
-			for &(ref who, begin, length, liquid) in self.vesting.iter() {
+			for &(ref who, begin, length, liquid) in config.vesting.iter() {
 				let balance = T::Currency::free_balance(who);
 				assert!(!balance.is_zero(), "Currencies must be init'd before vesting");
 				// Total genesis `balance` minus `liquid` equals funds locked for vesting
@@ -182,24 +151,24 @@ pub mod pallet {
 				let reasons = WithdrawReasons::TRANSFER | WithdrawReasons::RESERVE;
 				T::Currency::set_lock(VESTING_ID, who, locked, reasons);
 			}
-		}
+		})
 	}
+}
 
-	#[pallet::event]
-	#[pallet::generate_deposit(pub(super) fn deposit_event)]
-	#[pallet::metadata(T::AccountId = "AccountId", BalanceOf<T> = "Balance")]
-	pub enum Event<T: Config> {
+decl_event!(
+	pub enum Event<T> where AccountId = <T as frame_system::Config>::AccountId, Balance = BalanceOf<T> {
 		/// The amount vested has been updated. This could indicate more funds are available. The
 		/// balance given is the amount which is left unvested (and thus locked).
 		/// \[account, unvested\]
-		VestingUpdated(T::AccountId, BalanceOf<T>),
+		VestingUpdated(AccountId, Balance),
 		/// An \[account\] has become fully vested. No further vesting can happen.
-		VestingCompleted(T::AccountId),
+		VestingCompleted(AccountId),
 	}
+);
 
-	/// Error for the vesting pallet.
-	#[pallet::error]
-	pub enum Error<T> {
+decl_error! {
+	/// Error for the vesting module.
+	pub enum Error for Module<T: Config> {
 		/// The account given is not vesting.
 		NotVesting,
 		/// An existing vesting schedule already exists for this account that cannot be clobbered.
@@ -207,16 +176,22 @@ pub mod pallet {
 		/// Amount being transferred is too low to create a vesting schedule.
 		AmountLow,
 	}
+}
 
-	#[pallet::hooks]
-	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
+decl_module! {
+	/// Vesting module declaration.
+	pub struct Module<T: Config> for enum Call where origin: T::Origin {
+		type Error = Error<T>;
 
-	#[pallet::call]
-	impl<T: Config> Pallet<T> {
+		/// The minimum amount to be transferred to create a new vesting schedule.
+		const MinVestedTransfer: BalanceOf<T> = T::MinVestedTransfer::get();
+
+		fn deposit_event() = default;
+
 		/// Unlock any vested funds of the sender account.
 		///
 		/// The dispatch origin for this call must be _Signed_ and the sender must have funds still
-		/// locked under this pallet.
+		/// locked under this module.
 		///
 		/// Emits either `VestingCompleted` or `VestingUpdated`.
 		///
@@ -226,10 +201,10 @@ pub mod pallet {
 		///     - Reads: Vesting Storage, Balances Locks, [Sender Account]
 		///     - Writes: Vesting Storage, Balances Locks, [Sender Account]
 		/// # </weight>
-		#[pallet::weight(T::WeightInfo::vest_locked(MaxLocksOf::<T>::get())
+		#[weight = T::WeightInfo::vest_locked(MaxLocksOf::<T>::get())
 			.max(T::WeightInfo::vest_unlocked(MaxLocksOf::<T>::get()))
-		)]
-		pub fn vest(origin: OriginFor<T>) -> DispatchResult {
+		]
+		fn vest(origin) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			Self::update_lock(who)
 		}
@@ -239,7 +214,7 @@ pub mod pallet {
 		/// The dispatch origin for this call must be _Signed_.
 		///
 		/// - `target`: The account whose vested funds should be unlocked. Must have funds still
-		/// locked under this pallet.
+		/// locked under this module.
 		///
 		/// Emits either `VestingCompleted` or `VestingUpdated`.
 		///
@@ -249,10 +224,10 @@ pub mod pallet {
 		///     - Reads: Vesting Storage, Balances Locks, Target Account
 		///     - Writes: Vesting Storage, Balances Locks, Target Account
 		/// # </weight>
-		#[pallet::weight(T::WeightInfo::vest_other_locked(MaxLocksOf::<T>::get())
+		#[weight = T::WeightInfo::vest_other_locked(MaxLocksOf::<T>::get())
 			.max(T::WeightInfo::vest_other_unlocked(MaxLocksOf::<T>::get()))
-		)]
-		pub fn vest_other(origin: OriginFor<T>, target: <T::Lookup as StaticLookup>::Source) -> DispatchResult {
+		]
+		fn vest_other(origin, target: <T::Lookup as StaticLookup>::Source) -> DispatchResult {
 			ensure_signed(origin)?;
 			Self::update_lock(T::Lookup::lookup(target)?)
 		}
@@ -273,9 +248,9 @@ pub mod pallet {
 		///     - Reads: Vesting Storage, Balances Locks, Target Account, [Sender Account]
 		///     - Writes: Vesting Storage, Balances Locks, Target Account, [Sender Account]
 		/// # </weight>
-		#[pallet::weight(T::WeightInfo::vested_transfer(MaxLocksOf::<T>::get()))]
+		#[weight = T::WeightInfo::vested_transfer(MaxLocksOf::<T>::get())]
 		pub fn vested_transfer(
-			origin: OriginFor<T>,
+			origin,
 			target: <T::Lookup as StaticLookup>::Source,
 			schedule: VestingInfo<BalanceOf<T>, T::BlockNumber>,
 		) -> DispatchResult {
@@ -310,9 +285,9 @@ pub mod pallet {
 		///     - Reads: Vesting Storage, Balances Locks, Target Account, Source Account
 		///     - Writes: Vesting Storage, Balances Locks, Target Account, Source Account
 		/// # </weight>
-		#[pallet::weight(T::WeightInfo::force_vested_transfer(MaxLocksOf::<T>::get()))]
+		#[weight = T::WeightInfo::force_vested_transfer(MaxLocksOf::<T>::get())]
 		pub fn force_vested_transfer(
-			origin: OriginFor<T>,
+			origin,
 			source: <T::Lookup as StaticLookup>::Source,
 			target: <T::Lookup as StaticLookup>::Source,
 			schedule: VestingInfo<BalanceOf<T>, T::BlockNumber>,
@@ -334,43 +309,28 @@ pub mod pallet {
 	}
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
-	fn migrate_account(a: &T::AccountId) {
-		Vesting::<T>::migrate_key_from_blake(a);
-	}
-}
-
-impl<T: Trait> Module<T> {
-=======
 impl<T: Config> Module<T> {
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 	/// (Re)set or remove the module's currency lock on `who`'s account in accordance with their
-=======
-impl<T: Config> Pallet<T> {
-	/// (Re)set or remove the pallet's currency lock on `who`'s account in accordance with their
->>>>>>> 37e97cfec065fe4acc9712b4dd9a79ec1936fa7d
 	/// current unvested amount.
 	fn update_lock(who: T::AccountId) -> DispatchResult {
 		let vesting = Self::vesting(&who).ok_or(Error::<T>::NotVesting)?;
-		let now = <frame_system::Pallet<T>>::block_number();
+		let now = <frame_system::Module<T>>::block_number();
 		let locked_now = vesting.locked_at::<T::BlockNumberToBalance>(now);
 
 		if locked_now.is_zero() {
 			T::Currency::remove_lock(VESTING_ID, &who);
 			Vesting::<T>::remove(&who);
-			Self::deposit_event(Event::<T>::VestingCompleted(who));
+			Self::deposit_event(RawEvent::VestingCompleted(who));
 		} else {
 			let reasons = WithdrawReasons::TRANSFER | WithdrawReasons::RESERVE;
 			T::Currency::set_lock(VESTING_ID, &who, locked_now, reasons);
-			Self::deposit_event(Event::<T>::VestingUpdated(who, locked_now));
+			Self::deposit_event(RawEvent::VestingUpdated(who, locked_now));
 		}
 		Ok(())
 	}
 }
 
-impl<T: Config> VestingSchedule<T::AccountId> for Pallet<T> where
+impl<T: Config> VestingSchedule<T::AccountId> for Module<T> where
 	BalanceOf<T>: MaybeSerializeDeserialize + Debug
 {
 	type Moment = T::BlockNumber;
@@ -379,7 +339,7 @@ impl<T: Config> VestingSchedule<T::AccountId> for Pallet<T> where
 	/// Get the amount that is currently being vested and cannot be transferred out of this account.
 	fn vesting_balance(who: &T::AccountId) -> Option<BalanceOf<T>> {
 		if let Some(v) = Self::vesting(who) {
-			let now = <frame_system::Pallet<T>>::block_number();
+			let now = <frame_system::Module<T>>::block_number();
 			let locked_now = v.locked_at::<T::BlockNumberToBalance>(now);
 			Some(T::Currency::free_balance(who).min(locked_now))
 		} else {
@@ -414,8 +374,7 @@ impl<T: Config> VestingSchedule<T::AccountId> for Pallet<T> where
 		};
 		Vesting::<T>::insert(who, vesting_schedule);
 		// it can't fail, but even if somehow it did, we don't really care.
-		let res = Self::update_lock(who.clone());
-		debug_assert!(res.is_ok());
+		let _ = Self::update_lock(who.clone());
 		Ok(())
 	}
 
@@ -423,8 +382,7 @@ impl<T: Config> VestingSchedule<T::AccountId> for Pallet<T> where
 	fn remove_vesting_schedule(who: &T::AccountId) {
 		Vesting::<T>::remove(who);
 		// it can't fail, but even if somehow it did, we don't really care.
-		let res = Self::update_lock(who.clone());
-		debug_assert!(res.is_ok());
+		let _ = Self::update_lock(who.clone());
 	}
 }
 
@@ -450,9 +408,9 @@ mod tests {
 			NodeBlock = Block,
 			UncheckedExtrinsic = UncheckedExtrinsic,
 		{
-			System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-			Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-			Vesting: pallet_vesting::{Pallet, Call, Storage, Event<T>, Config<T>},
+			System: frame_system::{Module, Call, Config, Storage, Event<T>},
+			Balances: pallet_balances::{Module, Call, Storage, Config<T>, Event<T>},
+			Vesting: pallet_vesting::{Module, Call, Storage, Event<T>, Config<T>},
 		}
 	);
 
@@ -484,7 +442,6 @@ mod tests {
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
 		type SS58Prefix = ();
-		type OnSetCode = ();
 	}
 	parameter_types! {
 		pub const MaxLocks: u32 = 10;

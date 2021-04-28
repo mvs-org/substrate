@@ -122,7 +122,6 @@ mod until_imported;
 mod voting_rule;
 
 pub use authorities::{AuthoritySet, AuthoritySetChanges, SharedAuthoritySet};
-pub use aux_schema::best_justification;
 pub use finality_proof::{FinalityProof, FinalityProofProvider, FinalityProofError};
 pub use notification::{GrandpaJustificationSender, GrandpaJustificationStream};
 pub use import::{find_scheduled_change, find_forced_change, GrandpaBlockImport};
@@ -1020,7 +1019,7 @@ where
 					// set changed (not where the signal happened!) as the base.
 					let set_state = VoterSetState::live(
 						new.set_id,
-						&*self.env.authority_set.inner(),
+						&*self.env.authority_set.inner().read(),
 						(new.canon_hash, new.canon_number),
 					);
 
@@ -1134,12 +1133,13 @@ fn local_authority_id(
 	voters: &VoterSet<AuthorityId>,
 	keystore: Option<&SyncCryptoStorePtr>,
 ) -> Option<AuthorityId> {
-	keystore.and_then(|keystore| { 
-		voters
-		.iter()
-		.find(|(p, _)| {
-			SyncCryptoStore::has_keys(&**keystore, &[(p.to_raw_vec(), AuthorityId::ID)])
-		})
-		.map(|(p, _)| p.clone()) 
-	})
+	match keystore {
+		Some(keystore) => voters
+			.iter()
+			.find(|(p, _)| {
+				SyncCryptoStore::has_keys(&**keystore, &[(p.to_raw_vec(), AuthorityId::ID)])
+			})
+			.map(|(p, _)| p.clone()),
+		None => None,
+	}
 }

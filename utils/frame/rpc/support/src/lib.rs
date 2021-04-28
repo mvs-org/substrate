@@ -71,7 +71,7 @@ use sc_rpc_api::state::StateClient;
 /// }
 ///
 /// # async fn test() -> Result<(), RpcError> {
-/// let conn = http::connect("http://[::1]:8830").compat().await?;
+/// let conn = http::connect("http://[::1]:9933").compat().await?;
 /// let cl = StateClient::<Hash>::new(conn);
 ///
 /// let q = StorageQuery::value::<LastActionId>();

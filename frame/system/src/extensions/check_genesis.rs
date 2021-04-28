@@ -16,7 +16,7 @@
 // limitations under the License.
 
 use codec::{Encode, Decode};
-use crate::{Config, Pallet};
+use crate::{Config, Module};
 use sp_runtime::{
 	traits::{SignedExtension, Zero},
 	transaction_validity::TransactionValidityError,
@@ -53,6 +53,6 @@ impl<T: Config + Send + Sync> SignedExtension for CheckGenesis<T> {
 	const IDENTIFIER: &'static str = "CheckGenesis";
 
 	fn additional_signed(&self) -> Result<Self::AdditionalSigned, TransactionValidityError> {
-		Ok(<Pallet<T>>::block_hash(T::BlockNumber::zero()))
+		Ok(<Module<T>>::block_hash(T::BlockNumber::zero()))
 	}
 }

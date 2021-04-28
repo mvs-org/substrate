@@ -18,7 +18,7 @@
 use std::{pin::Pin, time::Duration, marker::PhantomData};
 use futures::{prelude::*, task::Context, task::Poll};
 use futures_timer::Delay;
-use sp_runtime::{Justification, Justifications, traits::{Block as BlockT, Header as HeaderT, NumberFor}};
+use sp_runtime::{Justification, traits::{Block as BlockT, Header as HeaderT, NumberFor}};
 use sp_utils::mpsc::{TracingUnboundedSender, tracing_unbounded, TracingUnboundedReceiver};
 use prometheus_endpoint::Registry;
 
@@ -112,24 +112,22 @@ impl<B: BlockT, Transaction: Send> ImportQueue<B> for BasicQueue<B, Transaction>
 		}
 	}
 
-	fn import_justifications(
+	fn import_justification(
 		&mut self,
 		who: Origin,
 		hash: B::Hash,
 		number: NumberFor<B>,
-		justifications: Justifications,
+		justification: Justification,
 	) {
-		for justification in justifications {
-			let res = self.justification_sender.unbounded_send(
-				worker_messages::ImportJustification(who, hash, number, justification),
-			);
+		let res = self.justification_sender.unbounded_send(
+			worker_messages::ImportJustification(who, hash, number, justification),
+		);
 
-			if res.is_err() {
-				log::error!(
-					target: "sync",
-					"import_justification: Background import task is no longer alive"
-				);
-			}
+		if res.is_err() {
+			log::error!(
+				target: "sync",
+				"import_justification: Background import task is no longer alive"
+			);
 		}
 	}
 
@@ -155,7 +153,7 @@ mod worker_messages {
 /// to be run.
 ///
 /// Returns when `block_import` ended.
-async fn block_import_process<B: BlockT, Transaction: Send + 'static>(
+async fn block_import_process<B: BlockT, Transaction: Send>(
 	mut block_import: BoxBlockImport<B, Transaction>,
 	mut verifier: impl Verifier<B>,
 	mut result_sender: BufferedLinkSender<B>,
@@ -195,7 +193,7 @@ struct BlockImportWorker<B: BlockT> {
 }
 
 impl<B: BlockT> BlockImportWorker<B> {
-	fn new<V: 'static + Verifier<B>, Transaction: Send + 'static>(
+	fn new<V: 'static + Verifier<B>, Transaction: Send>(
 		result_sender: BufferedLinkSender<B>,
 		verifier: V,
 		block_import: BoxBlockImport<B, Transaction>,
@@ -283,7 +281,7 @@ impl<B: BlockT> BlockImportWorker<B> {
 		who: Origin,
 		hash: B::Hash,
 		number: NumberFor<B>,
-		justification: Justification,
+		justification: Justification
 	) {
 		let started = wasm_timer::Instant::now();
 		let success = self.justification_import.as_mut().map(|justification_import| {
@@ -322,7 +320,7 @@ struct ImportManyBlocksResult<B: BlockT> {
 /// Import several blocks at once, returning import result for each block.
 ///
 /// This will yield after each imported block once, to ensure that other futures can be called as well.
-async fn import_many_blocks<B: BlockT, V: Verifier<B>, Transaction: Send + 'static>(
+async fn import_many_blocks<B: BlockT, V: Verifier<B>, Transaction>(
 	import_handle: &mut BoxBlockImport<B, Transaction>,
 	blocks_origin: BlockOrigin,
 	blocks: Vec<IncomingBlock<B>>,
@@ -371,7 +369,7 @@ async fn import_many_blocks<B: BlockT, V: Verifier<B>, Transaction: Send + 'stat
 				block,
 				verifier,
 				metrics.clone(),
-			).await
+			)
 		};
 
 		if let Some(metrics) = metrics.as_ref() {
@@ -439,32 +437,30 @@ mod tests {
 	use sp_test_primitives::{Block, BlockNumber, Extrinsic, Hash, Header};
 	use std::collections::HashMap;
 
-	#[async_trait::async_trait]
 	impl Verifier<Block> for () {
-		async fn verify(
+		fn verify(
 			&mut self,
 			origin: BlockOrigin,
 			header: Header,
-			_justifications: Option<Justifications>,
+			_justification: Option<Justification>,
 			_body: Option<Vec<Extrinsic>>,
 		) -> Result<(BlockImportParams<Block, ()>, Option<Vec<(CacheKeyId, Vec<u8>)>>), String> {
 			Ok((BlockImportParams::new(origin, header), None))
 		}
 	}
 
-	#[async_trait::async_trait]
 	impl BlockImport<Block> for () {
 		type Error = crate::Error;
 		type Transaction = Extrinsic;
 
-		async fn check_block(
+		fn check_block(
 			&mut self,
 			_block: BlockCheckParams<Block>,
 		) -> Result<ImportResult, Self::Error> {
 			Ok(ImportResult::imported(false))
 		}
 
-		async fn import_block(
+		fn import_block(
 			&mut self,
 			_block: BlockImportParams<Block, Self::Transaction>,
 			_cache: HashMap<CacheKeyId, Vec<u8>>,
@@ -545,7 +541,7 @@ mod tests {
 					hash,
 					header: Some(header),
 					body: None,
-					justifications: None,
+					justification: None,
 					origin: None,
 					allow_missing_state: false,
 					import_existing: false,
@@ -558,11 +554,12 @@ mod tests {
 
 		let mut import_justification = || {
 			let hash = Hash::random();
+
 			block_on(finality_sender.send(worker_messages::ImportJustification(
 				libp2p::PeerId::random(),
 				hash,
 				1,
-				(*b"TEST", Vec::new()),
+				Vec::new(),
 			)))
 			.unwrap();
 

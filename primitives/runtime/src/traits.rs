@@ -19,6 +19,7 @@
 
 use sp_std::prelude::*;
 use sp_std::{self, marker::PhantomData, convert::{TryFrom, TryInto}, fmt::Debug};
+use sp_io;
 #[cfg(feature = "std")]
 use std::fmt::Display;
 #[cfg(feature = "std")]
@@ -110,7 +111,7 @@ impl Verify for sp_core::ecdsa::Signature {
 			self.as_ref(),
 			&sp_io::hashing::blake2_256(msg.get()),
 		) {
-			Ok(pubkey) => signer.as_ref() == &pubkey[..],
+			Ok(pubkey) => &signer.as_ref()[..] == &pubkey[..],
 			_ => false,
 		}
 	}
@@ -1217,24 +1218,19 @@ macro_rules! impl_opaque_keys {
 			)*
 		}
 	) => {
-		$crate::paste::paste! {
-			#[cfg(feature = "std")]
-			use $crate::serde as [< __opaque_keys_serde_import__ $name >];
-			$( #[ $attr ] )*
-				#[derive(
-					Default, Clone, PartialEq, Eq,
-					$crate::codec::Encode,
-					$crate::codec::Decode,
-					$crate::RuntimeDebug,
-				)]
-			#[cfg_attr(feature = "std", derive($crate::serde::Serialize, $crate::serde::Deserialize))]
-			#[cfg_attr(feature = "std", serde(crate = "__opaque_keys_serde_import__" $name))]
-			pub struct $name {
-				$(
-					$( #[ $inner_attr ] )*
-						pub $field: <$type as $crate::BoundToRuntimeAppPublic>::Public,
-				)*
-			}
+		$( #[ $attr ] )*
+		#[derive(
+			Default, Clone, PartialEq, Eq,
+			$crate::codec::Encode,
+			$crate::codec::Decode,
+			$crate::RuntimeDebug,
+		)]
+		#[cfg_attr(feature = "std", derive($crate::serde::Serialize, $crate::serde::Deserialize))]
+		pub struct $name {
+			$(
+				$( #[ $inner_attr ] )*
+				pub $field: <$type as $crate::BoundToRuntimeAppPublic>::Public,
+			)*
 		}
 
 		impl $name {

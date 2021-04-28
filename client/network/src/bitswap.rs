@@ -25,6 +25,7 @@ use std::io;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use cid::Version;
+use codec::Encode;
 use core::pin::Pin;
 use futures::Future;
 use futures::io::{AsyncRead, AsyncWrite};
@@ -256,15 +257,15 @@ impl<B: BlockT> NetworkBehaviour for Bitswap<B> {
 			}
 			let mut hash = B::Hash::default();
 			hash.as_mut().copy_from_slice(&cid.hash().digest()[0..32]);
-			let transaction = match self.client.indexed_transaction(&hash) {
+			let extrinsic = match self.client.extrinsic(&hash) {
 				Ok(ex) => ex,
 				Err(e) => {
-					error!(target: LOG_TARGET, "Error retrieving transaction {}: {}", hash, e);
+					error!(target: LOG_TARGET, "Error retrieving extrinsic {}: {}", hash, e);
 					None
 				}
 			};
-			match transaction {
-				Some(transaction) => {
+			match extrinsic {
+				Some(extrinsic) => {
 					trace!(target: LOG_TARGET, "Found CID {:?}, hash {:?}", cid, hash);
 					if entry.want_type == WantType::Block as i32 {
 						let prefix = Prefix {
@@ -275,7 +276,7 @@ impl<B: BlockT> NetworkBehaviour for Bitswap<B> {
 						};
 						response.payload.push(MessageBlock {
 							prefix: prefix.to_bytes(),
-							data: transaction,
+							data: extrinsic.encode(),
 						});
 					} else {
 						response.block_presences.push(BlockPresence {

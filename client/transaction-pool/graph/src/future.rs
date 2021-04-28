@@ -47,22 +47,24 @@ impl<Hash: fmt::Debug, Ex: fmt::Debug> fmt::Debug for WaitingTransaction<Hash, E
 		write!(fmt, "WaitingTransaction {{ ")?;
 		write!(fmt, "imported_at: {:?}, ", self.imported_at)?;
 		write!(fmt, "transaction: {:?}, ", self.transaction)?;
-		write!(
-			fmt, 
-			"missing_tags: {{{}}}", 
-			self.missing_tags.iter()
-				.map(|tag| HexDisplay::from(tag).to_string()).collect::<Vec<_>>().join(", "),
-		)?;
-		write!(fmt, "}}")
+		write!(fmt, "missing_tags: {{")?;
+		let mut it = self.missing_tags.iter().map(|tag| HexDisplay::from(tag));
+		if let Some(tag) = it.next() {
+			write!(fmt, "{}", tag)?;
+		}
+		for tag in it {
+			write!(fmt, ", {}", tag)?;
+		}
+		write!(fmt, " }}}}")
 	}
 }
 
 impl<Hash, Ex> Clone for WaitingTransaction<Hash, Ex> {
 	fn clone(&self) -> Self {
-		Self {
+		WaitingTransaction {
 			transaction: self.transaction.clone(),
 			missing_tags: self.missing_tags.clone(),
-			imported_at: self.imported_at,
+			imported_at: self.imported_at.clone(),
 		}
 	}
 }
@@ -88,7 +90,7 @@ impl<Hash, Ex> WaitingTransaction<Hash, Ex> {
 			.cloned()
 			.collect();
 
-		Self {
+		WaitingTransaction {
 			transaction: Arc::new(transaction),
 			missing_tags,
 			imported_at: Instant::now(),
@@ -121,7 +123,7 @@ pub struct FutureTransactions<Hash: hash::Hash + Eq, Ex> {
 
 impl<Hash: hash::Hash + Eq, Ex> Default for FutureTransactions<Hash, Ex> {
 	fn default() -> Self {
-		Self {
+		FutureTransactions {
 			wanted_tags: Default::default(),
 			waiting: Default::default(),
 		}

@@ -33,11 +33,11 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
-		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-		Staking: pallet_staking::{Pallet, Call, Config<T>, Storage, Event<T>, ValidateUnsigned},
-		Indices: pallet_indices::{Pallet, Call, Storage, Config<T>, Event<T>},
-		Session: pallet_session::{Pallet, Call, Storage, Event, Config<T>},
+		System: frame_system::{Module, Call, Config, Storage, Event<T>},
+		Balances: pallet_balances::{Module, Call, Storage, Config<T>, Event<T>},
+		Staking: pallet_staking::{Module, Call, Config<T>, Storage, Event<T>, ValidateUnsigned},
+		Indices: pallet_indices::{Module, Call, Storage, Config<T>, Event<T>},
+		Session: pallet_session::{Module, Call, Storage, Event, Config<T>},
 	}
 );
 
@@ -63,15 +63,7 @@ impl frame_system::Config for Test {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
-<<<<<<< HEAD
-	type MigrateAccount = ();
-=======
 	type SS58Prefix = ();
-<<<<<<< HEAD
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
-=======
-	type OnSetCode = ();
->>>>>>> 37e97cfec065fe4acc9712b4dd9a79ec1936fa7d
 }
 parameter_types! {
 	pub const ExistentialDeposit: Balance = 10;
@@ -182,7 +174,7 @@ impl frame_election_provider_support::ElectionProvider<AccountId, BlockNumber>
 
 impl pallet_staking::Config for Test {
 	type Currency = Balances;
-	type UnixTime = pallet_timestamp::Pallet<Self>;
+	type UnixTime = pallet_timestamp::Module<Self>;
 	type CurrencyToVote = frame_support::traits::SaturatingCurrencyToVote;
 	type RewardRemainder = ();
 	type Event = Event;

@@ -15,20 +15,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Traits and associated utilities for use in the FRAME environment.
+//! Traits for FRAME.
 //!
 //! NOTE: If you're looking for `parameter_types`, it has moved in to the top-level module.
 
-pub mod tokens;
-pub use tokens::fungible;
-pub use tokens::fungibles;
-pub use tokens::currency::{
-	Currency, LockIdentifier, LockableCurrency, ReservableCurrency, VestingSchedule,
+use sp_std::{prelude::*, result, marker::PhantomData, ops::Div, fmt::Debug};
+use codec::{FullCodec, Codec, Encode, Decode, EncodeLike};
+use sp_core::u32_trait::Value as U32;
+use sp_runtime::{
+	traits::{
+		AtLeast32Bit, AtLeast32BitUnsigned, Block as BlockT, BadOrigin, Convert,
+		MaybeSerializeDeserialize, SaturatedConversion, Saturating, StoredMapError,
+		UniqueSaturatedFrom, UniqueSaturatedInto, Zero,
+	},
+	BoundToRuntimeAppPublic, ConsensusEngineId, DispatchError, DispatchResult, Percent,
+	RuntimeAppPublic, RuntimeDebug,
 };
-pub use tokens::imbalance::{Imbalance, OnUnbalanced, SignedImbalance};
-pub use tokens::{ExistenceRequirement, WithdrawReasons, BalanceStatus};
+use sp_staking::SessionIndex;
+use crate::dispatch::Parameter;
+use crate::storage::StorageMap;
+use crate::weights::Weight;
+use bitflags::bitflags;
+use impl_trait_for_tuples::impl_for_tuples;
 
-<<<<<<< HEAD
 /// Re-expected for the macro.
 #[doc(hidden)]
 pub use sp_std::{mem::{swap, take}, cell::RefCell, vec::Vec, boxed::Box};
@@ -102,13 +111,6 @@ pub trait Filter<T> {
 
 impl<T> Filter<T> for () {
 	fn filter(_: &T) -> bool { true }
-}
-
-/// Migrate a given account.
-#[impl_trait_for_tuples::impl_for_tuples(30)]
-pub trait MigrateAccount<A> {
-	/// Migrate the `account`.
-	fn migrate_account(account: &A);
 }
 
 /// Trait to add a constraint onto the filter.
@@ -1599,57 +1601,745 @@ pub trait OnGenesis {
 /// Prefix to be used (optionally) for implementing [`OnRuntimeUpgradeHelpersExt::storage_key`].
 #[cfg(feature = "try-runtime")]
 pub const ON_RUNTIME_UPGRADE_PREFIX: &[u8] = b"__ON_RUNTIME_UPGRADE__";
-=======
-mod members;
-pub use members::{
-	Contains, ContainsLengthBound, SortedMembers, InitializeMembers, ChangeMembers, All, IsInVec,
-	AsContains,
-};
->>>>>>> 37e97cfec065fe4acc9712b4dd9a79ec1936fa7d
 
-mod validation;
-pub use validation::{
-	ValidatorSet, ValidatorSetWithIdentification, OneSessionHandler, FindAuthor, VerifySeal,
-	EstimateNextNewSession, EstimateNextSessionRotation, KeyOwnerProofSystem, ValidatorRegistration,
-	Lateness,
-};
-
-mod filter;
-pub use filter::{
-	Filter, FilterStack, FilterStackGuard, ClearFilterGuard, InstanceFilter, IntegrityTest,
-};
-
-mod misc;
-pub use misc::{
-	Len, Get, GetDefault, HandleLifetime, TryDrop, Time, UnixTime, IsType, IsSubType, ExecuteBlock,
-	SameOrOther, OnNewAccount, OnKilledAccount, OffchainWorker, GetBacking, Backing, ExtrinsicCall,
-	EnsureInherentsAreFirst,
-};
-
-mod stored_map;
-pub use stored_map::{StoredMap, StorageMapShim};
-mod randomness;
-pub use randomness::Randomness;
-
-mod metadata;
-pub use metadata::{
-	CallMetadata, GetCallMetadata, GetCallName, PalletInfo, PalletVersion, GetPalletVersion,
-	PALLET_VERSION_STORAGE_KEY_POSTFIX, PalletInfoAccess,
-};
-
-mod hooks;
-pub use hooks::{Hooks, OnGenesis, OnInitialize, OnFinalize, OnIdle, OnRuntimeUpgrade, OnTimestampSet};
+/// Some helper functions for [`OnRuntimeUpgrade`] during `try-runtime` testing.
 #[cfg(feature = "try-runtime")]
-pub use hooks::{OnRuntimeUpgradeHelpersExt, ON_RUNTIME_UPGRADE_PREFIX};
+pub trait OnRuntimeUpgradeHelpersExt {
+	/// Generate a storage key unique to this runtime upgrade.
+	///
+	/// This can be used to communicate data from pre-upgrade to post-upgrade state and check
+	/// them. See [`Self::set_temp_storage`] and [`Self::get_temp_storage`].
+	#[cfg(feature = "try-runtime")]
+	fn storage_key(ident: &str) -> [u8; 32] {
+		let prefix = sp_io::hashing::twox_128(ON_RUNTIME_UPGRADE_PREFIX);
+		let ident = sp_io::hashing::twox_128(ident.as_bytes());
+
+		let mut final_key = [0u8; 32];
+		final_key[..16].copy_from_slice(&prefix);
+		final_key[16..].copy_from_slice(&ident);
+
+		final_key
+	}
+
+	/// Get temporary storage data written by [`Self::set_temp_storage`].
+	///
+	/// Returns `None` if either the data is unavailable or un-decodable.
+	///
+	/// A `at` storage identifier must be provided to indicate where the storage is being read from.
+	#[cfg(feature = "try-runtime")]
+	fn get_temp_storage<T: Decode>(at: &str) -> Option<T> {
+		sp_io::storage::get(&Self::storage_key(at))
+			.and_then(|bytes| Decode::decode(&mut &*bytes).ok())
+	}
+
+	/// Write some temporary data to a specific storage that can be read (potentially in
+	/// post-upgrade hook) via [`Self::get_temp_storage`].
+	///
+	/// A `at` storage identifier must be provided to indicate where the storage is being written
+	/// to.
+	#[cfg(feature = "try-runtime")]
+	fn set_temp_storage<T: Encode>(data: T, at: &str) {
+		sp_io::storage::set(&Self::storage_key(at), &data.encode());
+	}
+}
+
+#[cfg(feature = "try-runtime")]
+impl<U: OnRuntimeUpgrade> OnRuntimeUpgradeHelpersExt for U {}
+
+/// The runtime upgrade trait.
+///
+/// Implementing this lets you express what should happen when the runtime upgrades,
+/// and changes may need to occur to your module.
+pub trait OnRuntimeUpgrade {
+	/// Perform a module upgrade.
+	///
+	/// # Warning
+	///
+	/// This function will be called before we initialized any runtime state, aka `on_initialize`
+	/// wasn't called yet. So, information like the block number and any other
+	/// block local data are not accessible.
+	///
+	/// Return the non-negotiable weight consumed for runtime upgrade.
+	fn on_runtime_upgrade() -> crate::weights::Weight {
+		0
+	}
+
+	/// Execute some pre-checks prior to a runtime upgrade.
+	///
+	/// This hook is never meant to be executed on-chain but is meant to be used by testing tools.
+	#[cfg(feature = "try-runtime")]
+	fn pre_upgrade() -> Result<(), &'static str> { Ok(()) }
+
+	/// Execute some post-checks after a runtime upgrade.
+	///
+	/// This hook is never meant to be executed on-chain but is meant to be used by testing tools.
+	#[cfg(feature = "try-runtime")]
+	fn post_upgrade() -> Result<(), &'static str> { Ok(()) }
+}
+
+#[impl_for_tuples(30)]
+impl OnRuntimeUpgrade for Tuple {
+	fn on_runtime_upgrade() -> crate::weights::Weight {
+		let mut weight = 0;
+		for_tuples!( #( weight = weight.saturating_add(Tuple::on_runtime_upgrade()); )* );
+		weight
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn pre_upgrade() -> Result<(), &'static str> {
+		let mut result = Ok(());
+		for_tuples!( #( result = result.and(Tuple::pre_upgrade()); )* );
+		result
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn post_upgrade() -> Result<(), &'static str> {
+		let mut result = Ok(());
+		for_tuples!( #( result = result.and(Tuple::post_upgrade()); )* );
+		result
+	}
+}
+
+/// Off-chain computation trait.
+///
+/// Implementing this trait on a module allows you to perform long-running tasks
+/// that make (by default) validators generate transactions that feed results
+/// of those long-running computations back on chain.
+///
+/// NOTE: This function runs off-chain, so it can access the block state,
+/// but cannot preform any alterations. More specifically alterations are
+/// not forbidden, but they are not persisted in any way after the worker
+/// has finished.
+#[impl_for_tuples(30)]
+pub trait OffchainWorker<BlockNumber> {
+	/// This function is being called after every block import (when fully synced).
+	///
+	/// Implement this and use any of the `Offchain` `sp_io` set of APIs
+	/// to perform off-chain computations, calls and submit transactions
+	/// with results to trigger any on-chain changes.
+	/// Any state alterations are lost and are not persisted.
+	fn offchain_worker(_n: BlockNumber) {}
+}
+
+pub mod schedule {
+	use super::*;
+
+	/// Information relating to the period of a scheduled task. First item is the length of the
+	/// period and the second is the number of times it should be executed in total before the task
+	/// is considered finished and removed.
+	pub type Period<BlockNumber> = (BlockNumber, u32);
+
+	/// Priority with which a call is scheduled. It's just a linear amount with lowest values meaning
+	/// higher priority.
+	pub type Priority = u8;
+
+	/// The dispatch time of a scheduled task.
+	#[derive(Encode, Decode, Copy, Clone, PartialEq, Eq, RuntimeDebug)]
+	pub enum DispatchTime<BlockNumber> {
+		/// At specified block.
+		At(BlockNumber),
+		/// After specified number of blocks.
+		After(BlockNumber),
+	}
+
+	/// The highest priority. We invert the value so that normal sorting will place the highest
+	/// priority at the beginning of the list.
+	pub const HIGHEST_PRIORITY: Priority = 0;
+	/// Anything of this value or lower will definitely be scheduled on the block that they ask for, even
+	/// if it breaches the `MaximumWeight` limitation.
+	pub const HARD_DEADLINE: Priority = 63;
+	/// The lowest priority. Most stuff should be around here.
+	pub const LOWEST_PRIORITY: Priority = 255;
+
+	/// A type that can be used as a scheduler.
+	pub trait Anon<BlockNumber, Call, Origin> {
+		/// An address which can be used for removing a scheduled task.
+		type Address: Codec + Clone + Eq + EncodeLike + Debug;
+
+		/// Schedule a dispatch to happen at the beginning of some block in the future.
+		///
+		/// This is not named.
+		fn schedule(
+			when: DispatchTime<BlockNumber>,
+			maybe_periodic: Option<Period<BlockNumber>>,
+			priority: Priority,
+			origin: Origin,
+			call: Call
+		) -> Result<Self::Address, DispatchError>;
+
+		/// Cancel a scheduled task. If periodic, then it will cancel all further instances of that,
+		/// also.
+		///
+		/// Will return an error if the `address` is invalid.
+		///
+		/// NOTE: This guaranteed to work only *before* the point that it is due to be executed.
+		/// If it ends up being delayed beyond the point of execution, then it cannot be cancelled.
+		///
+		/// NOTE2: This will not work to cancel periodic tasks after their initial execution. For
+		/// that, you must name the task explicitly using the `Named` trait.
+		fn cancel(address: Self::Address) -> Result<(), ()>;
+
+		/// Reschedule a task. For one-off tasks, this dispatch is guaranteed to succeed
+		/// only if it is executed *before* the currently scheduled block. For periodic tasks,
+		/// this dispatch is guaranteed to succeed only before the *initial* execution; for
+		/// others, use `reschedule_named`.
+		///
+		/// Will return an error if the `address` is invalid.
+		fn reschedule(
+			address: Self::Address,
+			when: DispatchTime<BlockNumber>,
+		) -> Result<Self::Address, DispatchError>;
+
+		/// Return the next dispatch time for a given task.
+		///
+		/// Will return an error if the `address` is invalid.
+		fn next_dispatch_time(address: Self::Address) -> Result<BlockNumber, ()>;
+	}
+
+	/// A type that can be used as a scheduler.
+	pub trait Named<BlockNumber, Call, Origin> {
+		/// An address which can be used for removing a scheduled task.
+		type Address: Codec + Clone + Eq + EncodeLike + sp_std::fmt::Debug;
+
+		/// Schedule a dispatch to happen at the beginning of some block in the future.
+		///
+		/// - `id`: The identity of the task. This must be unique and will return an error if not.
+		fn schedule_named(
+			id: Vec<u8>,
+			when: DispatchTime<BlockNumber>,
+			maybe_periodic: Option<Period<BlockNumber>>,
+			priority: Priority,
+			origin: Origin,
+			call: Call
+		) -> Result<Self::Address, ()>;
+
+		/// Cancel a scheduled, named task. If periodic, then it will cancel all further instances
+		/// of that, also.
+		///
+		/// Will return an error if the `id` is invalid.
+		///
+		/// NOTE: This guaranteed to work only *before* the point that it is due to be executed.
+		/// If it ends up being delayed beyond the point of execution, then it cannot be cancelled.
+		fn cancel_named(id: Vec<u8>) -> Result<(), ()>;
+
+		/// Reschedule a task. For one-off tasks, this dispatch is guaranteed to succeed
+		/// only if it is executed *before* the currently scheduled block.
+		fn reschedule_named(
+			id: Vec<u8>,
+			when: DispatchTime<BlockNumber>,
+		) -> Result<Self::Address, DispatchError>;
+
+		/// Return the next dispatch time for a given task.
+		///
+		/// Will return an error if the `id` is invalid.
+		fn next_dispatch_time(id: Vec<u8>) -> Result<BlockNumber, ()>;
+	}
+}
+
+/// Some sort of check on the origin is performed by this object.
+pub trait EnsureOrigin<OuterOrigin> {
+	/// A return type.
+	type Success;
+	/// Perform the origin check.
+	fn ensure_origin(o: OuterOrigin) -> result::Result<Self::Success, BadOrigin> {
+		Self::try_origin(o).map_err(|_| BadOrigin)
+	}
+	/// Perform the origin check.
+	fn try_origin(o: OuterOrigin) -> result::Result<Self::Success, OuterOrigin>;
+
+	/// Returns an outer origin capable of passing `try_origin` check.
+	///
+	/// ** Should be used for benchmarking only!!! **
+	#[cfg(feature = "runtime-benchmarks")]
+	fn successful_origin() -> OuterOrigin;
+}
+
+/// Type that can be dispatched with an origin but without checking the origin filter.
+///
+/// Implemented for pallet dispatchable type by `decl_module` and for runtime dispatchable by
+/// `construct_runtime` and `impl_outer_dispatch`.
+pub trait UnfilteredDispatchable {
+	/// The origin type of the runtime, (i.e. `frame_system::Config::Origin`).
+	type Origin;
+
+	/// Dispatch this call but do not check the filter in origin.
+	fn dispatch_bypass_filter(self, origin: Self::Origin) -> crate::dispatch::DispatchResultWithPostInfo;
+}
+
+/// Methods available on `frame_system::Config::Origin`.
+pub trait OriginTrait: Sized {
+	/// Runtime call type, as in `frame_system::Config::Call`
+	type Call;
+
+	/// The caller origin, overarching type of all pallets origins.
+	type PalletsOrigin;
+
+	/// The AccountId used across the system.
+	type AccountId;
+
+	/// Add a filter to the origin.
+	fn add_filter(&mut self, filter: impl Fn(&Self::Call) -> bool + 'static);
+
+	/// Reset origin filters to default one, i.e `frame_system::Config::BaseCallFilter`.
+	fn reset_filter(&mut self);
+
+	/// Replace the caller with caller from the other origin
+	fn set_caller_from(&mut self, other: impl Into<Self>);
+
+	/// Filter the call, if false then call is filtered out.
+	fn filter_call(&self, call: &Self::Call) -> bool;
+
+	/// Get the caller.
+	fn caller(&self) -> &Self::PalletsOrigin;
+
+	/// Create with system none origin and `frame-system::Config::BaseCallFilter`.
+	fn none() -> Self;
+
+	/// Create with system root origin and no filter.
+	fn root() -> Self;
+
+	/// Create with system signed origin and `frame-system::Config::BaseCallFilter`.
+	fn signed(by: Self::AccountId) -> Self;
+}
+
+/// Trait to be used when types are exactly same.
+///
+/// This allow to convert back and forth from type, a reference and a mutable reference.
+pub trait IsType<T>: Into<T> + From<T> {
+	/// Cast reference.
+	fn from_ref(t: &T) -> &Self;
+
+	/// Cast reference.
+	fn into_ref(&self) -> &T;
+
+	/// Cast mutable reference.
+	fn from_mut(t: &mut T) -> &mut Self;
+
+	/// Cast mutable reference.
+	fn into_mut(&mut self) -> &mut T;
+}
+
+impl<T> IsType<T> for T {
+	fn from_ref(t: &T) -> &Self { t }
+	fn into_ref(&self) -> &T { self }
+	fn from_mut(t: &mut T) -> &mut Self { t }
+	fn into_mut(&mut self) -> &mut T { self }
+}
+
+/// An instance of a pallet in the storage.
+///
+/// It is required that these instances are unique, to support multiple instances per pallet in the same runtime!
+///
+/// E.g. for module MyModule default instance will have prefix "MyModule" and other instances
+/// "InstanceNMyModule".
+pub trait Instance: 'static {
+	/// Unique module prefix. E.g. "InstanceNMyModule" or "MyModule"
+	const PREFIX: &'static str;
+}
+
+/// An instance of a storage in a pallet.
+///
+/// Define an instance for an individual storage inside a pallet.
+/// The pallet prefix is used to isolate the storage between pallets, and the storage prefix is
+/// used to isolate storages inside a pallet.
+///
+/// NOTE: These information can be used to define storages in pallet such as a `StorageMap` which
+/// can use keys after `twox_128(pallet_prefix())++twox_128(STORAGE_PREFIX)`
+pub trait StorageInstance {
+	/// Prefix of a pallet to isolate it from other pallets.
+	fn pallet_prefix() -> &'static str;
+
+	/// Prefix given to a storage to isolate from other storages in the pallet.
+	const STORAGE_PREFIX: &'static str;
+}
+
+/// Implement Get by returning Default for any type that implements Default.
+pub struct GetDefault;
+impl<T: Default> crate::traits::Get<T> for GetDefault {
+	fn get() -> T {
+		T::default()
+	}
+}
+
+/// A trait similar to `Convert` to convert values from `B` an abstract balance type
+/// into u64 and back from u128. (This conversion is used in election and other places where complex
+/// calculation over balance type is needed)
+///
+/// Total issuance of the currency is passed in, but an implementation of this trait may or may not
+/// use it.
+///
+/// # WARNING
+///
+/// the total issuance being passed in implies that the implementation must be aware of the fact
+/// that its values can affect the outcome. This implies that if the vote value is dependent on the
+/// total issuance, it should never ber written to storage for later re-use.
+pub trait CurrencyToVote<B> {
+	/// Convert balance to u64.
+	fn to_vote(value: B, issuance: B) -> u64;
+
+	/// Convert u128 to balance.
+	fn to_currency(value: u128, issuance: B) -> B;
+}
+
+/// An implementation of `CurrencyToVote` tailored for chain's that have a balance type of u128.
+///
+/// The factor is the `(total_issuance / u64::max()).max(1)`, represented as u64. Let's look at the
+/// important cases:
+///
+/// If the chain's total issuance is less than u64::max(), this will always be 1, which means that
+/// the factor will not have any effect. In this case, any account's balance is also less. Thus,
+/// both of the conversions are basically an `as`; Any balance can fit in u64.
+///
+/// If the chain's total issuance is more than 2*u64::max(), then a factor might be multiplied and
+/// divided upon conversion.
+pub struct U128CurrencyToVote;
+
+impl U128CurrencyToVote {
+	fn factor(issuance: u128) -> u128 {
+		(issuance / u64::max_value() as u128).max(1)
+	}
+}
+
+impl CurrencyToVote<u128> for U128CurrencyToVote {
+	fn to_vote(value: u128, issuance: u128) -> u64 {
+		(value / Self::factor(issuance)).saturated_into()
+	}
+
+	fn to_currency(value: u128, issuance: u128) -> u128 {
+		value.saturating_mul(Self::factor(issuance))
+	}
+}
+
+
+/// A naive implementation of `CurrencyConvert` that simply saturates all conversions.
+///
+/// # Warning
+///
+/// This is designed to be used mostly for testing. Use with care, and think about the consequences.
+pub struct SaturatingCurrencyToVote;
+
+impl<B: UniqueSaturatedInto<u64> + UniqueSaturatedFrom<u128>> CurrencyToVote<B> for SaturatingCurrencyToVote {
+	fn to_vote(value: B, _: B) -> u64 {
+		value.unique_saturated_into()
+	}
+
+	fn to_currency(value: u128, _: B) -> B {
+		B::unique_saturated_from(value)
+	}
+}
+
+/// Something that can be checked to be a of sub type `T`.
+///
+/// This is useful for enums where each variant encapsulates a different sub type, and
+/// you need access to these sub types.
+///
+/// For example, in FRAME, this trait is implemented for the runtime `Call` enum. Pallets use this
+/// to check if a certain call is an instance of the local pallet's `Call` enum.
+///
+/// # Example
+///
+/// ```
+/// # use frame_support::traits::IsSubType;
+///
+/// enum Test {
+///     String(String),
+///     U32(u32),
+/// }
+///
+/// impl IsSubType<String> for Test {
+///     fn is_sub_type(&self) -> Option<&String> {
+///         match self {
+///             Self::String(ref r) => Some(r),
+///             _ => None,
+///         }
+///     }
+/// }
+///
+/// impl IsSubType<u32> for Test {
+///     fn is_sub_type(&self) -> Option<&u32> {
+///         match self {
+///             Self::U32(ref r) => Some(r),
+///             _ => None,
+///         }
+///     }
+/// }
+///
+/// fn main() {
+///     let data = Test::String("test".into());
+///
+///     assert_eq!("test", IsSubType::<String>::is_sub_type(&data).unwrap().as_str());
+/// }
+/// ```
+pub trait IsSubType<T> {
+	/// Returns `Some(_)` if `self` is an instance of sub type `T`.
+	fn is_sub_type(&self) -> Option<&T>;
+}
+
+/// The pallet hooks trait. Implementing this lets you express some logic to execute.
+pub trait Hooks<BlockNumber> {
+	/// The block is being finalized. Implement to have something happen.
+	fn on_finalize(_n: BlockNumber) {}
+
+	/// This will be run when the block is being finalized (before `on_finalize`).
+	/// Implement to have something happen using the remaining weight.
+	/// Will not fire if the remaining weight is 0.
+	/// Return the weight used, the hook will subtract it from current weight used
+	/// and pass the result to the next `on_idle` hook if it exists.
+	fn on_idle(
+		_n: BlockNumber,
+		_remaining_weight: crate::weights::Weight
+	) -> crate::weights::Weight {
+		0
+	}
+
+	/// The block is being initialized. Implement to have something happen.
+	///
+	/// Return the non-negotiable weight consumed in the block.
+	fn on_initialize(_n: BlockNumber) -> crate::weights::Weight { 0 }
+
+	/// Perform a module upgrade.
+	///
+	/// NOTE: this doesn't include all pallet logic triggered on runtime upgrade. For instance it
+	/// doesn't include the write of the pallet version in storage. The final complete logic
+	/// triggered on runtime upgrade is given by implementation of `OnRuntimeUpgrade` trait by
+	/// `Pallet`.
+	///
+	/// # Warning
+	///
+	/// This function will be called before we initialized any runtime state, aka `on_initialize`
+	/// wasn't called yet. So, information like the block number and any other
+	/// block local data are not accessible.
+	///
+	/// Return the non-negotiable weight consumed for runtime upgrade.
+	fn on_runtime_upgrade() -> crate::weights::Weight { 0 }
+
+	/// Execute some pre-checks prior to a runtime upgrade.
+	///
+	/// This hook is never meant to be executed on-chain but is meant to be used by testing tools.
+	#[cfg(feature = "try-runtime")]
+	fn pre_upgrade() -> Result<(), &'static str> {
+		Ok(())
+	}
+
+	/// Execute some post-checks after a runtime upgrade.
+	///
+	/// This hook is never meant to be executed on-chain but is meant to be used by testing tools.
+	#[cfg(feature = "try-runtime")]
+	fn post_upgrade() -> Result<(), &'static str> {
+		Ok(())
+	}
+
+	/// Implementing this function on a module allows you to perform long-running tasks
+	/// that make (by default) validators generate transactions that feed results
+	/// of those long-running computations back on chain.
+	///
+	/// NOTE: This function runs off-chain, so it can access the block state,
+	/// but cannot preform any alterations. More specifically alterations are
+	/// not forbidden, but they are not persisted in any way after the worker
+	/// has finished.
+	///
+	/// This function is being called after every block import (when fully synced).
+	///
+	/// Implement this and use any of the `Offchain` `sp_io` set of APIs
+	/// to perform off-chain computations, calls and submit transactions
+	/// with results to trigger any on-chain changes.
+	/// Any state alterations are lost and are not persisted.
+	fn offchain_worker(_n: BlockNumber) {}
+
+	/// Run integrity test.
+	///
+	/// The test is not executed in a externalities provided environment.
+	fn integrity_test() {}
+}
+
+/// A trait to define the build function of a genesis config, T and I are placeholder for pallet
+/// trait and pallet instance.
 #[cfg(feature = "std")]
-pub use hooks::GenesisBuild;
+pub trait GenesisBuild<T, I=()>: Default + MaybeSerializeDeserialize {
+	/// The build function is called within an externalities allowing storage APIs.
+	/// Thus one can write to storage using regular pallet storages.
+	fn build(&self);
 
-pub mod schedule;
-mod storage;
-pub use storage::{Instance, StorageInstance};
+	/// Build the storage using `build` inside default storage.
+	fn build_storage(&self) -> Result<sp_runtime::Storage, String> {
+		let mut storage = Default::default();
+		self.assimilate_storage(&mut storage)?;
+		Ok(storage)
+	}
 
-mod dispatch;
-pub use dispatch::{EnsureOrigin, OriginTrait, UnfilteredDispatchable};
+	/// Assimilate the storage for this module into pre-existing overlays.
+	fn assimilate_storage(&self, storage: &mut sp_runtime::Storage) -> Result<(), String> {
+		sp_state_machine::BasicExternalities::execute_with_storage(storage, || {
+			self.build();
+			Ok(())
+		})
+	}
+}
 
-mod voting;
-pub use voting::{CurrencyToVote, SaturatingCurrencyToVote, U128CurrencyToVote};
+/// The storage key postfix that is used to store the [`PalletVersion`] per pallet.
+///
+/// The full storage key is built by using:
+/// Twox128([`PalletInfo::name`]) ++ Twox128([`PALLET_VERSION_STORAGE_KEY_POSTFIX`])
+pub const PALLET_VERSION_STORAGE_KEY_POSTFIX: &[u8] = b":__PALLET_VERSION__:";
+
+/// The version of a pallet.
+///
+/// Each pallet version is stored in the state under a fixed key. See
+/// [`PALLET_VERSION_STORAGE_KEY_POSTFIX`] for how this key is built.
+#[derive(RuntimeDebug, Eq, PartialEq, Encode, Decode, Ord, Clone, Copy)]
+pub struct PalletVersion {
+	/// The major version of the pallet.
+	pub major: u16,
+	/// The minor version of the pallet.
+	pub minor: u8,
+	/// The patch version of the pallet.
+	pub patch: u8,
+}
+
+impl PalletVersion {
+	/// Creates a new instance of `Self`.
+	pub fn new(major: u16, minor: u8, patch: u8) -> Self {
+		Self {
+			major,
+			minor,
+			patch,
+		}
+	}
+
+	/// Returns the storage key for a pallet version.
+	///
+	/// See [`PALLET_VERSION_STORAGE_KEY_POSTFIX`] on how this key is built.
+	///
+	/// Returns `None` if the given `PI` returned a `None` as name for the given
+	/// `Pallet`.
+	pub fn storage_key<PI: PalletInfo, Pallet: 'static>() -> Option<[u8; 32]> {
+		let pallet_name = PI::name::<Pallet>()?;
+
+		let pallet_name = sp_io::hashing::twox_128(pallet_name.as_bytes());
+		let postfix = sp_io::hashing::twox_128(PALLET_VERSION_STORAGE_KEY_POSTFIX);
+
+		let mut final_key = [0u8; 32];
+		final_key[..16].copy_from_slice(&pallet_name);
+		final_key[16..].copy_from_slice(&postfix);
+
+		Some(final_key)
+	}
+
+	/// Put this pallet version into the storage.
+	///
+	/// It will use the storage key that is associated with the given `Pallet`.
+	///
+	/// # Panics
+	///
+	/// This function will panic iff `Pallet` can not be found by `PalletInfo`.
+	/// In a runtime that is put together using
+	/// [`construct_runtime!`](crate::construct_runtime) this should never happen.
+	///
+	/// It will also panic if this function isn't executed in an externalities
+	/// provided environment.
+	pub fn put_into_storage<PI: PalletInfo, Pallet: 'static>(&self) {
+		let key = Self::storage_key::<PI, Pallet>()
+			.expect("Every active pallet has a name in the runtime; qed");
+
+		crate::storage::unhashed::put(&key, self);
+	}
+}
+
+impl sp_std::cmp::PartialOrd for PalletVersion {
+	fn partial_cmp(&self, other: &Self) -> Option<sp_std::cmp::Ordering> {
+		let res = self.major
+			.cmp(&other.major)
+			.then_with(||
+				self.minor
+					.cmp(&other.minor)
+					.then_with(|| self.patch.cmp(&other.patch)
+			));
+
+		Some(res)
+	}
+}
+
+/// Provides version information about a pallet.
+///
+/// This trait provides two functions for returning the version of a
+/// pallet. There is a state where both functions can return distinct versions.
+/// See [`GetPalletVersion::storage_version`] for more information about this.
+pub trait GetPalletVersion {
+	/// Returns the current version of the pallet.
+	fn current_version() -> PalletVersion;
+
+	/// Returns the version of the pallet that is stored in storage.
+	///
+	/// Most of the time this will return the exact same version as
+	/// [`GetPalletVersion::current_version`]. Only when being in
+	/// a state after a runtime upgrade happened and the pallet did
+	/// not yet updated its version in storage, this will return a
+	/// different(the previous, seen from the time of calling) version.
+	///
+	/// See [`PalletVersion`] for more information.
+	///
+	/// # Note
+	///
+	/// If there was no previous version of the pallet stored in the state,
+	/// this function returns `None`.
+	fn storage_version() -> Option<PalletVersion>;
+}
+
+/// Something that can execute a given block.
+///
+/// Executing a block means that all extrinsics in a given block will be executed and the resulting
+/// header will be checked against the header of the given block.
+pub trait ExecuteBlock<Block: BlockT> {
+	/// Execute the given `block`.
+	///
+	/// This will execute all extrinsics in the block and check that the resulting header is correct.
+	///
+	/// # Panic
+	///
+	/// Panics when an extrinsics panics or the resulting header doesn't match the expected header.
+	fn execute_block(block: Block);
+}
+
+/// A trait which is called when the timestamp is set in the runtime.
+#[impl_trait_for_tuples::impl_for_tuples(30)]
+pub trait OnTimestampSet<Moment> {
+	/// Called when the timestamp is set.
+	fn on_timestamp_set(moment: Moment);
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn on_initialize_and_on_runtime_upgrade_weight_merge_works() {
+		struct Test;
+		impl OnInitialize<u8> for Test {
+			fn on_initialize(_n: u8) -> crate::weights::Weight {
+				10
+			}
+		}
+		impl OnRuntimeUpgrade for Test {
+			fn on_runtime_upgrade() -> crate::weights::Weight {
+				20
+			}
+		}
+
+		assert_eq!(<(Test, Test)>::on_initialize(0), 20);
+		assert_eq!(<(Test, Test)>::on_runtime_upgrade(), 40);
+	}
+
+	#[test]
+	fn check_pallet_version_ordering() {
+		let version = PalletVersion::new(1, 0, 0);
+		assert!(version > PalletVersion::new(0, 1, 2));
+		assert!(version == PalletVersion::new(1, 0, 0));
+		assert!(version < PalletVersion::new(1, 0, 1));
+		assert!(version < PalletVersion::new(1, 1, 0));
+
+		let version = PalletVersion::new(2, 50, 50);
+		assert!(version < PalletVersion::new(2, 50, 51));
+		assert!(version > PalletVersion::new(2, 49, 51));
+		assert!(version < PalletVersion::new(3, 49, 51));
+	}
+}

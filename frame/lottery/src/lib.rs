@@ -56,7 +56,7 @@ pub mod weights;
 
 use sp_std::prelude::*;
 use sp_runtime::{
-	DispatchError,
+	DispatchError, ModuleId,
 	traits::{AccountIdConversion, Saturating, Zero},
 };
 use frame_support::{
@@ -66,7 +66,7 @@ use frame_support::{
 		Currency, ReservableCurrency, Get, EnsureOrigin, ExistenceRequirement::KeepAlive, Randomness,
 	},
 };
-use frame_support::{weights::Weight, PalletId};
+use frame_support::weights::Weight;
 use frame_system::ensure_signed;
 use codec::{Encode, Decode};
 pub use weights::WeightInfo;
@@ -76,7 +76,7 @@ type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Con
 /// The module's config trait.
 pub trait Config: frame_system::Config {
 	/// The Lottery's module id
-	type PalletId: Get<PalletId>;
+	type ModuleId: Get<ModuleId>;
 
 	/// A dispatchable call.
 	type Call: Parameter + Dispatchable<Origin=Self::Origin> + GetDispatchInfo + From<frame_system::Call<Self>>;
@@ -209,9 +209,7 @@ decl_error! {
 
 decl_module! {
 	pub struct Module<T: Config> for enum Call where origin: T::Origin, system = frame_system {
-		type Error = Error<T>;
-
-		const PalletId: PalletId = T::PalletId::get();
+		const ModuleId: ModuleId = T::ModuleId::get();
 		const MaxCalls: u32 = T::MaxCalls::get() as u32;
 
 		fn deposit_event() = default;
@@ -279,7 +277,7 @@ decl_module! {
 				ensure!(lottery.is_none(), Error::<T>::InProgress);
 				let index = LotteryIndex::get();
 				let new_index = index.checked_add(1).ok_or(Error::<T>::Overflow)?;
-				let start = frame_system::Pallet::<T>::block_number();
+				let start = frame_system::Module::<T>::block_number();
 				// Use new_index to more easily track everything with the current state.
 				*lottery = Some(LotteryConfig {
 					price,
@@ -326,8 +324,7 @@ decl_module! {
 						let winning_number = Self::choose_winner(ticket_count);
 						let winner = Tickets::<T>::get(winning_number).unwrap_or(lottery_account);
 						// Not much we can do if this fails...
-						let res = T::Currency::transfer(&Self::account_id(), &winner, lottery_balance, KeepAlive);
-						debug_assert!(res.is_ok());
+						let _ = T::Currency::transfer(&Self::account_id(), &winner, lottery_balance, KeepAlive);
 
 						Self::deposit_event(RawEvent::Winner(winner, lottery_balance));
 
@@ -361,7 +358,7 @@ impl<T: Config> Module<T> {
 	/// This actually does computation. If you need to keep using it, then make sure you cache the
 	/// value and only call this once.
 	pub fn account_id() -> T::AccountId {
-		T::PalletId::get().into_account()
+		T::ModuleId::get().into_account()
 	}
 
 	/// Return the pot account and amount of money in the pot.
@@ -395,7 +392,7 @@ impl<T: Config> Module<T> {
 	fn do_buy_ticket(caller: &T::AccountId, call: &<T as Config>::Call) -> DispatchResult {
 		// Check the call is valid lottery
 		let config = Lottery::<T>::get().ok_or(Error::<T>::NotConfigured)?;
-		let block_number = frame_system::Pallet::<T>::block_number();
+		let block_number = frame_system::Module::<T>::block_number();
 		ensure!(block_number < config.start.saturating_add(config.length), Error::<T>::AlreadyEnded);
 		ensure!(T::ValidateCall::validate_call(call), Error::<T>::InvalidCall);
 		let call_index = Self::call_to_index(call)?;
@@ -449,7 +446,7 @@ impl<T: Config> Module<T> {
 	// TODO: deal with randomness freshness
 	// https://github.com/paritytech/substrate/issues/8311
 	fn generate_random_number(seed: u32) -> u32 {
-		let (random_seed, _) = T::Randomness::random(&(T::PalletId::get(), seed).encode());
+		let (random_seed, _) = T::Randomness::random(&(T::ModuleId::get(), seed).encode());
 		let random_number = <u32>::decode(&mut random_seed.as_ref())
 			.expect("secure hashes should always be bigger than u32; qed");
 		random_number

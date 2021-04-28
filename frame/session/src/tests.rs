@@ -18,9 +18,8 @@
 // Tests for the Session Pallet
 
 use super::*;
-use mock::Test;
 use codec::Decode;
-use frame_support::{traits::OnInitialize, assert_ok, assert_noop};
+use frame_support::{traits::OnInitialize, assert_ok};
 use sp_core::crypto::key_types::DUMMY;
 use sp_runtime::testing::UintAuthorityId;
 use mock::{
@@ -182,14 +181,11 @@ fn duplicates_are_not_allowed() {
 	new_test_ext().execute_with(|| {
 		System::set_block_number(1);
 		Session::on_initialize(1);
-		assert_noop!(
-			Session::set_keys(Origin::signed(4), UintAuthorityId(1).into(), vec![]),
-			Error::<Test>::DuplicatedKey,
-		);
-		assert_ok!(Session::set_keys(Origin::signed(1), UintAuthorityId(10).into(), vec![]));
+		assert!(Session::set_keys(Origin::signed(4), UintAuthorityId(1).into(), vec![]).is_err());
+		assert!(Session::set_keys(Origin::signed(1), UintAuthorityId(10).into(), vec![]).is_ok());
 
 		// is fine now that 1 has migrated off.
-		assert_ok!(Session::set_keys(Origin::signed(4), UintAuthorityId(1).into(), vec![]));
+		assert!(Session::set_keys(Origin::signed(4), UintAuthorityId(1).into(), vec![]).is_ok());
 	});
 }
 
@@ -361,6 +357,7 @@ fn return_true_if_more_than_third_is_disabled() {
 #[test]
 fn upgrade_keys() {
 	use frame_support::storage;
+	use mock::Test;
 	use sp_core::crypto::key_types::DUMMY;
 
 	// This test assumes certain mocks.

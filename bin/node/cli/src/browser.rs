@@ -48,7 +48,7 @@ async fn start_inner(
 
 	info!("Substrate browser node");
 	info!("✌️  version {}", config.impl_version);
-	info!("❤️  by Metaverse team, 2017-2021");
+	info!("❤️  by Parity Technologies, 2017-2021");
 	info!("📋 Chain specification: {}", config.chain_spec.name());
 	info!("🏷 Node name: {}", config.network.node_name);
 	info!("👤 Role: {:?}", config.role);

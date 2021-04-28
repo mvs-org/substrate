@@ -381,11 +381,11 @@ impl Default for ElectionCompute {
 #[derive(PartialEq, Eq, Clone, Encode, Decode, RuntimeDebug)]
 pub struct RawSolution<C> {
 	/// Compact election edges.
-	pub compact: C,
+	compact: C,
 	/// The _claimed_ score of the solution.
-	pub score: ElectionScore,
+	score: ElectionScore,
 	/// The round at which this solution should be submitted.
-	pub round: u32,
+	round: u32,
 }
 
 impl<C: Default> Default for RawSolution<C> {
@@ -402,13 +402,13 @@ pub struct ReadySolution<A> {
 	///
 	/// This is target-major vector, storing each winners, total backing, and each individual
 	/// backer.
-	pub supports: Supports<A>,
+	supports: Supports<A>,
 	/// The score of the solution.
 	///
 	/// This is needed to potentially challenge the solution.
-	pub score: ElectionScore,
+	score: ElectionScore,
 	/// How this election was computed.
-	pub compute: ElectionCompute,
+	compute: ElectionCompute,
 }
 
 /// A snapshot of all the data that is needed for en entire round. They are provided by
@@ -432,10 +432,10 @@ pub struct RoundSnapshot<A> {
 pub struct SolutionOrSnapshotSize {
 	/// The length of voters.
 	#[codec(compact)]
-	pub voters: u32,
+	voters: u32,
 	/// The length of targets.
 	#[codec(compact)]
-	pub targets: u32,
+	targets: u32,
 }
 
 /// Internal errors of the pallet.
@@ -534,18 +534,11 @@ pub mod pallet {
 		/// Maximum number of iteration of balancing that will be executed in the embedded miner of
 		/// the pallet.
 		type MinerMaxIterations: Get<u32>;
-
 		/// Maximum weight that the miner should consume.
 		///
 		/// The miner will ensure that the total weight of the unsigned solution will not exceed
-		/// this value, based on [`WeightInfo::submit_unsigned`].
+		/// this values, based on [`WeightInfo::submit_unsigned`].
 		type MinerMaxWeight: Get<Weight>;
-
-		/// Maximum length (bytes) that the mined solution should consume.
-		///
-		/// The miner will ensure that the total length of the unsigned solution will not exceed
-		/// this value.
-		type MinerMaxLength: Get<u32>;
 
 		/// Something that will provide the election data.
 		type DataProvider: ElectionDataProvider<Self::AccountId, Self::BlockNumber>;
@@ -685,16 +678,6 @@ pub mod pallet {
 			let _: UpperOf<CompactAccuracyOf<T>> = maximum_chain_accuracy
 				.iter()
 				.fold(Zero::zero(), |acc, x| acc.checked_add(x).unwrap());
-
-			// We only accept data provider who's maximum votes per voter matches our
-			// `T::CompactSolution`'s `LIMIT`.
-			//
-			// NOTE that this pallet does not really need to enforce this in runtime. The compact
-			// solution cannot represent any voters more than `LIMIT` anyhow.
-			assert_eq!(
-				<T::DataProvider as ElectionDataProvider<T::AccountId, T::BlockNumber>>::MAXIMUM_VOTES_PER_VOTER,
-				<CompactOf<T> as CompactSolution>::LIMIT as u32,
-			);
 		}
 	}
 
@@ -1418,7 +1401,7 @@ mod tests {
 			roll_to(30);
 			assert!(MultiPhase::current_phase().is_signed());
 
-			assert_ok!(MultiPhase::elect());
+			let _ = MultiPhase::elect().unwrap();
 
 			assert!(MultiPhase::current_phase().is_off());
 			assert!(MultiPhase::snapshot().is_none());
@@ -1441,7 +1424,7 @@ mod tests {
 			assert!(MultiPhase::current_phase().is_off());
 
 			// this module is now only capable of doing on-chain backup.
-			assert_ok!(MultiPhase::elect());
+			let _ = MultiPhase::elect().unwrap();
 
 			assert!(MultiPhase::current_phase().is_off());
 		});

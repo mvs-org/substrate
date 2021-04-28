@@ -17,8 +17,8 @@
 
 //! # Democracy Pallet
 //!
-//! - [`Config`]
-//! - [`Call`]
+//! - [`democracy::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
 //!
 //! ## Overview
 //!
@@ -162,14 +162,8 @@ use frame_support::{
 	decl_module, decl_storage, decl_event, decl_error, ensure, Parameter,
 	weights::{Weight, DispatchClass, Pays},
 	traits::{
-<<<<<<< HEAD
-		Currency, ReservableCurrency, LockableCurrency, WithdrawReason, LockIdentifier, Get,
-		OnUnbalanced, BalanceStatus, schedule::{Named as ScheduleNamed, DispatchTime}, EnsureOrigin,
-		MigrateAccount,
-=======
 		Currency, ReservableCurrency, LockableCurrency, WithdrawReasons, LockIdentifier, Get,
 		OnUnbalanced, BalanceStatus, schedule::{Named as ScheduleNamed, DispatchTime}, EnsureOrigin
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 	},
 	dispatch::DispatchResultWithPostInfo,
 };
@@ -602,7 +596,7 @@ decl_module! {
 
 			if let Some((until, _)) = <Blacklist<T>>::get(proposal_hash) {
 				ensure!(
-					<frame_system::Pallet<T>>::block_number() >= until,
+					<frame_system::Module<T>>::block_number() >= until,
 					Error::<T>::ProposalBlacklisted,
 				);
 			}
@@ -694,7 +688,7 @@ decl_module! {
 			ensure!(!<NextExternal<T>>::exists(), Error::<T>::DuplicateProposal);
 			if let Some((until, _)) = <Blacklist<T>>::get(proposal_hash) {
 				ensure!(
-					<frame_system::Pallet<T>>::block_number() >= until,
+					<frame_system::Module<T>>::block_number() >= until,
 					Error::<T>::ProposalBlacklisted,
 				);
 			}
@@ -782,7 +776,7 @@ decl_module! {
 			ensure!(proposal_hash == e_proposal_hash, Error::<T>::InvalidHash);
 
 			<NextExternal<T>>::kill();
-			let now = <frame_system::Pallet<T>>::block_number();
+			let now = <frame_system::Module<T>>::block_number();
 			Self::inject_referendum(now + voting_period, proposal_hash, threshold, delay);
 		}
 
@@ -812,7 +806,7 @@ decl_module! {
 				.err().ok_or(Error::<T>::AlreadyVetoed)?;
 
 			existing_vetoers.insert(insert_position, who.clone());
-			let until = <frame_system::Pallet<T>>::block_number() + T::CooloffPeriod::get();
+			let until = <frame_system::Module<T>>::block_number() + T::CooloffPeriod::get();
 			<Blacklist<T>>::insert(&proposal_hash, (until, existing_vetoers));
 
 			Self::deposit_event(RawEvent::Vetoed(who, proposal_hash, until));
@@ -1010,14 +1004,13 @@ decl_module! {
 					_ => None,
 				}).ok_or(Error::<T>::PreimageMissing)?;
 
-			let now = <frame_system::Pallet<T>>::block_number();
+			let now = <frame_system::Module<T>>::block_number();
 			let (voting, enactment) = (T::VotingPeriod::get(), T::EnactmentPeriod::get());
 			let additional = if who == provider { Zero::zero() } else { enactment };
 			ensure!(now >= since + voting + additional, Error::<T>::TooEarly);
 			ensure!(expiry.map_or(true, |e| now > e), Error::<T>::Imminent);
 
-			let res = T::Currency::repatriate_reserved(&provider, &who, deposit, BalanceStatus::Free);
-			debug_assert!(res.is_ok());
+			let _ = T::Currency::repatriate_reserved(&provider, &who, deposit, BalanceStatus::Free);
 			<Preimages<T>>::remove(&proposal_hash);
 			Self::deposit_event(RawEvent::PreimageReaped(proposal_hash, provider, deposit, who));
 		}
@@ -1216,7 +1209,7 @@ impl<T: Config> Module<T> {
 		delay: T::BlockNumber
 	) -> ReferendumIndex {
 		<Module<T>>::inject_referendum(
-			<frame_system::Pallet<T>>::block_number() + T::VotingPeriod::get(),
+			<frame_system::Module<T>>::block_number() + T::VotingPeriod::get(),
 			proposal_hash,
 			threshold,
 			delay
@@ -1315,7 +1308,7 @@ impl<T: Config> Module<T> {
 					Some(ReferendumInfo::Finished{end, approved}) =>
 						if let Some((lock_periods, balance)) = votes[i].1.locked_if(approved) {
 							let unlock_at = end + T::EnactmentPeriod::get() * lock_periods.into();
-							let now = system::Pallet::<T>::block_number();
+							let now = system::Module::<T>::block_number();
 							if now < unlock_at {
 								ensure!(matches!(scope, UnvoteScope::Any), Error::<T>::NoPermission);
 								prior.accumulate(unlock_at, balance)
@@ -1442,7 +1435,7 @@ impl<T: Config> Module<T> {
 				} => {
 					// remove any delegation votes to our current target.
 					let votes = Self::reduce_upstream_delegation(&target, conviction.votes(balance));
-					let now = system::Pallet::<T>::block_number();
+					let now = system::Module::<T>::block_number();
 					let lock_periods = conviction.lock_periods().into();
 					prior.accumulate(now + T::EnactmentPeriod::get() * lock_periods, balance);
 					voting.set_common(delegations, prior);
@@ -1462,7 +1455,7 @@ impl<T: Config> Module<T> {
 	/// a security hole) but may be reduced from what they are currently.
 	fn update_lock(who: &T::AccountId) {
 		let lock_needed = VotingOf::<T>::mutate(who, |voting| {
-			voting.rejig(system::Pallet::<T>::block_number());
+			voting.rejig(system::Module::<T>::block_number());
 			voting.locked_balance()
 		});
 		if lock_needed.is_zero() {
@@ -1548,8 +1541,7 @@ impl<T: Config> Module<T> {
 		let preimage = <Preimages<T>>::take(&proposal_hash);
 		if let Some(PreimageStatus::Available { data, provider, deposit, .. }) = preimage {
 			if let Ok(proposal) = T::Proposal::decode(&mut &data[..]) {
-				let err_amount = T::Currency::unreserve(&provider, deposit);
-				debug_assert!(err_amount.is_zero());
+				let _ = T::Currency::unreserve(&provider, deposit);
 				Self::deposit_event(RawEvent::PreimageUsed(proposal_hash, provider, deposit));
 
 				let ok = proposal.dispatch(frame_system::RawOrigin::Root.into()).is_ok();
@@ -1659,7 +1651,10 @@ impl<T: Config> Module<T> {
 		// To decode the enum variant we only need the first byte.
 		let mut buf = [0u8; 1];
 		let key = <Preimages<T>>::hashed_key_for(proposal_hash);
-		let bytes = sp_io::storage::read(&key, &mut buf, 0).ok_or_else(|| Error::<T>::NotImminent)?;
+		let bytes = match sp_io::storage::read(&key, &mut buf, 0) {
+			Some(bytes) => bytes,
+			None => return Err(Error::<T>::NotImminent.into()),
+		};
 		// The value may be smaller that 1 byte.
 		let mut input = &buf[0..buf.len().min(bytes as usize)];
 
@@ -1687,7 +1682,10 @@ impl<T: Config> Module<T> {
 		// * at most 5 bytes to decode a `Compact<u32>`
 		let mut buf = [0u8; 6];
 		let key = <Preimages<T>>::hashed_key_for(proposal_hash);
-		let bytes = sp_io::storage::read(&key, &mut buf, 0).ok_or_else(|| Error::<T>::PreimageMissing)?;
+		let bytes = match sp_io::storage::read(&key, &mut buf, 0) {
+			Some(bytes) => bytes,
+			None => return Err(Error::<T>::PreimageMissing.into()),
+		};
 		// The value may be smaller that 6 bytes.
 		let mut input = &buf[0..buf.len().min(bytes as usize)];
 
@@ -1718,7 +1716,7 @@ impl<T: Config> Module<T> {
 			.saturating_mul(T::PreimageByteDeposit::get());
 		T::Currency::reserve(&who, deposit)?;
 
-		let now = <frame_system::Pallet<T>>::block_number();
+		let now = <frame_system::Module<T>>::block_number();
 		let a = PreimageStatus::Available {
 			data: encoded_proposal,
 			provider: who.clone(),
@@ -1740,7 +1738,7 @@ impl<T: Config> Module<T> {
 		let status = Preimages::<T>::get(&proposal_hash).ok_or(Error::<T>::NotImminent)?;
 		let expiry = status.to_missing_expiry().ok_or(Error::<T>::DuplicatePreimage)?;
 
-		let now = <frame_system::Pallet<T>>::block_number();
+		let now = <frame_system::Module<T>>::block_number();
 		let free = <BalanceOf<T>>::zero();
 		let a = PreimageStatus::Available {
 			data: encoded_proposal,
@@ -1761,7 +1759,10 @@ impl<T: Config> Module<T> {
 fn decode_compact_u32_at(key: &[u8]) -> Option<u32> {
 	// `Compact<u32>` takes at most 5 bytes.
 	let mut buf = [0u8; 5];
-	let bytes = sp_io::storage::read(&key, &mut buf, 0)?;
+	let bytes = match sp_io::storage::read(&key, &mut buf, 0) {
+		Some(bytes) => bytes,
+		None => return None,
+	};
 	// The value may be smaller than 5 bytes.
 	let mut input = &buf[0..buf.len().min(bytes as usize)];
 	match codec::Compact::<u32>::decode(&mut input) {
@@ -1771,15 +1772,5 @@ fn decode_compact_u32_at(key: &[u8]) -> Option<u32> {
 			sp_runtime::print(key);
 			None
 		}
-	}
-}
-
-pub fn migrate_account<T: Trait>(a: &T::AccountId) {
-	Locks::<T>::migrate_key_from_blake(a);
-}
-
-impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
-	fn migrate_account(a: &T::AccountId) {
-		migrate_account::<T>(a)
 	}
 }

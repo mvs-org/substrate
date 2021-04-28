@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use sp_runtime::traits::{Block as BlockT, Header as HeaderT, NumberFor};
 use sp_runtime::generic::BlockId;
-use sp_runtime::Justifications;
+use sp_runtime::Justification;
 use log::warn;
 use parking_lot::RwLock;
 
@@ -84,8 +84,8 @@ pub trait HeaderBackend<Block: BlockT>: Send + Sync {
 pub trait Backend<Block: BlockT>: HeaderBackend<Block> + HeaderMetadata<Block, Error=Error> {
 	/// Get block body. Returns `None` if block is not found.
 	fn body(&self, id: BlockId<Block>) -> Result<Option<Vec<<Block as BlockT>::Extrinsic>>>;
-	/// Get block justifications. Returns `None` if no justification exists.
-	fn justifications(&self, id: BlockId<Block>) -> Result<Option<Justifications>>;
+	/// Get block justification. Returns `None` if justification does not exist.
+	fn justification(&self, id: BlockId<Block>) -> Result<Option<Justification>>;
 	/// Get last finalized block hash.
 	fn last_finalized(&self) -> Result<Block::Hash>;
 	/// Returns data cache reference, if it is enabled on this backend.
@@ -216,16 +216,15 @@ pub trait Backend<Block: BlockT>: HeaderBackend<Block> + HeaderMetadata<Block, E
 		Ok(None)
 	}
 
-	/// Get single indexed transaction by content hash. Note that this will only fetch transactions
-	/// that are indexed by the runtime with `storage_index_transaction`.
-	fn indexed_transaction(
+	/// Get single extrinsic by hash.
+	fn extrinsic(
 		&self,
 		hash: &Block::Hash,
-	) -> Result<Option<Vec<u8>>>;
+	) -> Result<Option<<Block as BlockT>::Extrinsic>>;
 
-	/// Check if indexed transaction exists.
-	fn has_indexed_transaction(&self, hash: &Block::Hash) -> Result<bool> {
-		Ok(self.indexed_transaction(hash)?.is_some())
+	/// Check if extrinsic exists.
+	fn have_extrinsic(&self, hash: &Block::Hash) -> Result<bool> {
+		Ok(self.extrinsic(hash)?.is_some())
 	}
 }
 

@@ -27,10 +27,10 @@ use sp_core::{
 };
 use sp_runtime::generic::BlockId;
 use sp_runtime::traits::{Block as BlockT, Header as HeaderT, Zero, NumberFor, HashFor};
-use sp_runtime::{Justification, Justifications, Storage};
+use sp_runtime::{Justification, Storage};
 use sp_state_machine::{
 	ChangesTrieTransaction, InMemoryBackend, Backend as StateBackend, StorageCollection,
-	ChildStorageCollection, IndexOperation,
+	ChildStorageCollection,
 };
 use sp_blockchain::{CachedHeaderMetadata, HeaderMetadata};
 
@@ -51,12 +51,12 @@ struct PendingBlock<B: BlockT> {
 
 #[derive(PartialEq, Eq, Clone)]
 enum StoredBlock<B: BlockT> {
-	Header(B::Header, Option<Justifications>),
-	Full(B, Option<Justifications>),
+	Header(B::Header, Option<Justification>),
+	Full(B, Option<Justification>),
 }
 
 impl<B: BlockT> StoredBlock<B> {
-	fn new(header: B::Header, body: Option<Vec<B::Extrinsic>>, just: Option<Justifications>) -> Self {
+	fn new(header: B::Header, body: Option<Vec<B::Extrinsic>>, just: Option<Justification>) -> Self {
 		match body {
 			Some(body) => StoredBlock::Full(B::new(header, body), just),
 			None => StoredBlock::Header(header, just),
@@ -70,7 +70,7 @@ impl<B: BlockT> StoredBlock<B> {
 		}
 	}
 
-	fn justifications(&self) -> Option<&Justifications> {
+	fn justification(&self) -> Option<&Justification> {
 		match *self {
 			StoredBlock::Header(_, ref j) | StoredBlock::Full(_, ref j) => j.as_ref()
 		}
@@ -83,7 +83,7 @@ impl<B: BlockT> StoredBlock<B> {
 		}
 	}
 
-	fn into_inner(self) -> (B::Header, Option<Vec<B::Extrinsic>>, Option<Justifications>) {
+	fn into_inner(self) -> (B::Header, Option<Vec<B::Extrinsic>>, Option<Justification>) {
 		match self {
 			StoredBlock::Header(header, just) => (header, None, just),
 			StoredBlock::Full(block, just) => {
@@ -164,7 +164,7 @@ impl<Block: BlockT> Blockchain<Block> {
 		&self,
 		hash: Block::Hash,
 		header: <Block as BlockT>::Header,
-		justifications: Option<Justifications>,
+		justification: Option<Justification>,
 		body: Option<Vec<<Block as BlockT>::Extrinsic>>,
 		new_state: NewBlockState,
 	) -> sp_blockchain::Result<()> {
@@ -176,7 +176,7 @@ impl<Block: BlockT> Blockchain<Block> {
 		{
 			let mut storage = self.storage.write();
 			storage.leaves.import(hash.clone(), number.clone(), header.parent_hash().clone());
-			storage.blocks.insert(hash.clone(), StoredBlock::new(header, body, justifications));
+			storage.blocks.insert(hash.clone(), StoredBlock::new(header, body, justification));
 
 			if let NewBlockState::Final = new_state {
 				storage.finalized_hash = hash;
@@ -226,8 +226,10 @@ impl<Block: BlockT> Blockchain<Block> {
 
 	/// Set an existing block as head.
 	pub fn set_head(&self, id: BlockId<Block>) -> sp_blockchain::Result<()> {
-		let header = self.header(id)?
-			.ok_or_else(|| sp_blockchain::Error::UnknownBlock(format!("{}", id)))?;
+		let header = match self.header(id)? {
+			Some(h) => h,
+			None => return Err(sp_blockchain::Error::UnknownBlock(format!("{}", id))),
+		};
 
 		self.apply_head(&header)
 	}
@@ -283,40 +285,12 @@ impl<Block: BlockT> Blockchain<Block> {
 			let block = storage.blocks.get_mut(&hash)
 				.expect("hash was fetched from a block in the db; qed");
 
-			let block_justifications = match block {
+			let block_justification = match block {
 				StoredBlock::Header(_, ref mut j) | StoredBlock::Full(_, ref mut j) => j
 			};
 
-			*block_justifications = justification.map(Justifications::from);
+			*block_justification = justification;
 		}
-
-		Ok(())
-	}
-
-	fn append_justification(&self, id: BlockId<Block>, justification: Justification)
-		-> sp_blockchain::Result<()>
-	{
-		let hash = self.expect_block_hash_from_id(&id)?;
-		let mut storage = self.storage.write();
-
-		let block = storage
-			.blocks
-			.get_mut(&hash)
-			.expect("hash was fetched from a block in the db; qed");
-
-		let block_justifications = match block {
-			StoredBlock::Header(_, ref mut j) | StoredBlock::Full(_, ref mut j) => j
-		};
-
-		if let Some(stored_justifications) = block_justifications {
-			if !stored_justifications.append(justification) {
-				return Err(sp_blockchain::Error::BadJustification(
-					"Duplicate consensus engine ID".into()
-				));
-			}
-		} else {
-			*block_justifications = Some(Justifications::from(justification));
-		};
 
 		Ok(())
 	}
@@ -391,9 +365,9 @@ impl<Block: BlockT> blockchain::Backend<Block> for Blockchain<Block> {
 		}))
 	}
 
-	fn justifications(&self, id: BlockId<Block>) -> sp_blockchain::Result<Option<Justifications>> {
+	fn justification(&self, id: BlockId<Block>) -> sp_blockchain::Result<Option<Justification>> {
 		Ok(self.id(id).and_then(|hash| self.storage.read().blocks.get(&hash).and_then(|b|
-			b.justifications().map(|x| x.clone()))
+			b.justification().map(|x| x.clone()))
 		))
 	}
 
@@ -413,10 +387,10 @@ impl<Block: BlockT> blockchain::Backend<Block> for Blockchain<Block> {
 		unimplemented!()
 	}
 
-	fn indexed_transaction(
+	fn extrinsic(
 		&self,
 		_hash: &Block::Hash,
-	) -> sp_blockchain::Result<Option<Vec<u8>>> {
+	) -> sp_blockchain::Result<Option<<Block as BlockT>::Extrinsic>> {
 		unimplemented!("Not supported by the in-mem backend.")
 	}
 }
@@ -534,12 +508,12 @@ impl<Block: BlockT> backend::BlockImportOperation<Block> for BlockImportOperatio
 		&mut self,
 		header: <Block as BlockT>::Header,
 		body: Option<Vec<<Block as BlockT>::Extrinsic>>,
-		justifications: Option<Justifications>,
+		justification: Option<Justification>,
 		state: NewBlockState,
 	) -> sp_blockchain::Result<()> {
 		assert!(self.pending_block.is_none(), "Only one block per operation is allowed");
 		self.pending_block = Some(PendingBlock {
-			block: StoredBlock::new(header, body, justifications),
+			block: StoredBlock::new(header, body, justification),
 			state,
 		});
 		Ok(())
@@ -609,10 +583,6 @@ impl<Block: BlockT> backend::BlockImportOperation<Block> for BlockImportOperatio
 	fn mark_head(&mut self, block: BlockId<Block>) -> sp_blockchain::Result<()> {
 		assert!(self.pending_block.is_none(), "Only one set block per operation is allowed");
 		self.set_head = Some(block);
-		Ok(())
-	}
-
-	fn update_transaction_index(&mut self, _index: Vec<IndexOperation>) -> sp_blockchain::Result<()> {
 		Ok(())
 	}
 }
@@ -726,14 +696,6 @@ impl<Block: BlockT> backend::Backend<Block> for Backend<Block> where Block::Hash
 		self.blockchain.finalize_header(block, justification)
 	}
 
-	fn append_justification(
-		&self,
-		block: BlockId<Block>,
-		justification: Justification,
-	) -> sp_blockchain::Result<()> {
-		self.blockchain.append_justification(block, justification)
-	}
-
 	fn blockchain(&self) -> &Self::Blockchain {
 		&self.blockchain
 	}
@@ -758,8 +720,10 @@ impl<Block: BlockT> backend::Backend<Block> for Backend<Block> where Block::Hash
 			_ => {},
 		}
 
-		self.blockchain.id(block).and_then(|id| self.states.read().get(&id).cloned())
-			.ok_or_else(|| sp_blockchain::Error::UnknownBlock(format!("{}", block)))
+		match self.blockchain.id(block).and_then(|id| self.states.read().get(&id).cloned()) {
+			Some(state) => Ok(state),
+			None => Err(sp_blockchain::Error::UnknownBlock(format!("{}", block))),
+		}
 	}
 
 	fn revert(
@@ -801,65 +765,4 @@ pub fn check_genesis_storage(storage: &Storage) -> sp_blockchain::Result<()> {
 	}
 
 	Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-	use crate::{NewBlockState, in_mem::Blockchain};
-	use sp_api::{BlockId, HeaderT};
-	use sp_runtime::{ConsensusEngineId, Justifications};
-	use sp_blockchain::Backend;
-	use substrate_test_runtime::{Block, Header, H256};
-
-	pub const ID1: ConsensusEngineId = *b"TST1";
-	pub const ID2: ConsensusEngineId = *b"TST2";
-
-	fn header(number: u64) -> Header {
-		let parent_hash = match number {
-			0 => Default::default(),
-			_ => header(number - 1).hash(),
-		};
-		Header::new(number, H256::from_low_u64_be(0), H256::from_low_u64_be(0), parent_hash, Default::default())
-	}
-
-	fn test_blockchain() -> Blockchain<Block> {
-		let blockchain = Blockchain::<Block>::new();
-		let just0 = Some(Justifications::from((ID1, vec![0])));
-		let just1 = Some(Justifications::from((ID1, vec![1])));
-		let just2 = None;
-		let just3 = Some(Justifications::from((ID1, vec![3])));
-		blockchain.insert(header(0).hash(), header(0), just0, None, NewBlockState::Final).unwrap();
-		blockchain.insert(header(1).hash(), header(1), just1, None, NewBlockState::Final).unwrap();
-		blockchain.insert(header(2).hash(), header(2), just2, None, NewBlockState::Best).unwrap();
-		blockchain.insert(header(3).hash(), header(3), just3, None, NewBlockState::Final).unwrap();
-		blockchain
-	}
-
-	#[test]
-	fn append_and_retrieve_justifications() {
-		let blockchain = test_blockchain();
-		let last_finalized = blockchain.last_finalized().unwrap();
-		let block = BlockId::Hash(last_finalized);
-
-		blockchain.append_justification(block, (ID2, vec![4])).unwrap();
-		let justifications = {
-			let mut just = Justifications::from((ID1, vec![3]));
-			just.append((ID2, vec![4]));
-			just
-		};
-		assert_eq!(blockchain.justifications(block).unwrap(), Some(justifications));
-	}
-
-	#[test]
-	fn store_duplicate_justifications_is_forbidden() {
-		let blockchain = test_blockchain();
-		let last_finalized = blockchain.last_finalized().unwrap();
-		let block = BlockId::Hash(last_finalized);
-
-		blockchain.append_justification(block, (ID2, vec![0])).unwrap();
-		assert!(matches!(
-			blockchain.append_justification(block, (ID2, vec![1])),
-			Err(sp_blockchain::Error::BadJustification(_)),
-		));
-	}
 }

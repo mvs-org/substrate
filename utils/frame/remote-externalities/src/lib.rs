@@ -18,7 +18,7 @@
 //! # Remote Externalities
 //!
 //! An equivalent of `sp_io::TestExternalities` that can load its state from a remote substrate
-//! based chain, or a local state snapshot file.
+//! based chain, or a local cache file.
 //!
 //! #### Runtime to Test Against
 //!
@@ -76,7 +76,7 @@
 //!             assert_eq!(
 //!                 // note: the hash corresponds to 3098546. We can check only the parent.
 //!                 // https://polkascan.io/kusama/block/3098546
-//!                 <frame_system::Pallet<Runtime>>::block_hash(3098545u32),
+//!                 <frame_system::Module<Runtime>>::block_hash(3098545u32),
 //!                 parent,
 //!             )
 //!         });
@@ -106,122 +106,126 @@ use std::{
 	path::{Path, PathBuf},
 };
 use log::*;
-use sp_core::hashing::twox_128;
+use sp_core::{hashing::twox_128};
 pub use sp_io::TestExternalities;
 use sp_core::{
 	hexdisplay::HexDisplay,
 	storage::{StorageKey, StorageData},
 };
 use codec::{Encode, Decode};
-use jsonrpsee_http_client::{HttpClient, HttpClientBuilder};
-
-use sp_runtime::traits::Block as BlockT;
+use jsonrpsee_http_client::{HttpClient, HttpConfig};
 
 type KeyPair = (StorageKey, StorageData);
+type Hash = sp_core::H256;
+// TODO: make these two generic.
 
 const LOG_TARGET: &str = "remote-ext";
-const TARGET: &str = "http://localhost:8830";
+const TARGET: &str = "http://localhost:9933";
 
 jsonrpsee_proc_macros::rpc_client_api! {
-	RpcApi<B: BlockT> {
+	RpcApi {
 		#[rpc(method = "state_getPairs", positional_params)]
-		fn storage_pairs(prefix: StorageKey, hash: Option<B::Hash>) -> Vec<(StorageKey, StorageData)>;
+		fn storage_pairs(prefix: StorageKey, hash: Option<Hash>) -> Vec<(StorageKey, StorageData)>;
 		#[rpc(method = "chain_getFinalizedHead")]
-		fn finalized_head() -> B::Hash;
+		fn finalized_head() -> Hash;
 	}
 }
 
 /// The execution mode.
 #[derive(Clone)]
-pub enum Mode<B: BlockT> {
+pub enum Mode {
 	/// Online.
-	Online(OnlineConfig<B>),
-	/// Offline. Uses a state snapshot file and needs not any client config.
+	Online(OnlineConfig),
+	/// Offline. Uses a cached file and needs not any client config.
 	Offline(OfflineConfig),
 }
 
 /// configuration of the online execution.
 ///
-/// A state snapshot config must be present.
+/// A cache config must be present.
 #[derive(Clone)]
 pub struct OfflineConfig {
-	/// The configuration of the state snapshot file to use. It must be present.
-	pub state_snapshot: SnapshotConfig,
+	/// The configuration of the cache file to use. It must be present.
+	pub cache: CacheConfig,
 }
 
 /// Configuration of the online execution.
 ///
-/// A state snapshot config may be present and will be written to in that case.
+/// A cache config may be present and will be written to in that case.
 #[derive(Clone)]
-pub struct OnlineConfig<B: BlockT> {
+pub struct OnlineConfig {
 	/// The HTTP uri to use.
 	pub uri: String,
 	/// The block number at which to connect. Will be latest finalized head if not provided.
-	pub at: Option<B::Hash>,
-	/// An optional state snapshot file to WRITE to, not for reading. Not written if set to `None`.
-	pub state_snapshot: Option<SnapshotConfig>,
+	pub at: Option<Hash>,
+	/// An optional cache file to WRITE to, not for reading. Not cached if set to `None`.
+	pub cache: Option<CacheConfig>,
 	/// The modules to scrape. If empty, entire chain state will be scraped.
 	pub modules: Vec<String>,
 }
 
-impl<B: BlockT> Default for OnlineConfig<B> {
+impl Default for OnlineConfig {
 	fn default() -> Self {
-		Self { uri: TARGET.to_owned(), at: None, state_snapshot: None, modules: Default::default() }
+		Self { uri: TARGET.to_owned(), at: None, cache: None, modules: Default::default() }
 	}
 }
 
-impl<B: BlockT> OnlineConfig<B> {
+impl OnlineConfig {
 	/// Return a new http rpc client.
 	fn rpc(&self) -> HttpClient {
-		HttpClientBuilder::default().max_request_body_size(u32::MAX).build(&self.uri)
+		HttpClient::new(&self.uri, HttpConfig { max_request_body_size: u32::MAX })
 			.expect("valid HTTP url; qed")
 	}
 }
 
-/// Configuration of the state snapshot.
+/// Configuration of the cache.
 #[derive(Clone)]
-pub struct SnapshotConfig {
-	/// The path to the snapshot file.
-	pub path: PathBuf,
+pub struct CacheConfig {
+	// TODO: I could mix these two into one filed, but I think separate is better bc one can be
+	// configurable while one not.
+	/// File name.
+	pub name: String,
+	/// Base directory.
+	pub directory: String,
 }
 
-impl SnapshotConfig {
-	pub fn new<P: Into<PathBuf>>(path: P) -> Self {
-		Self { path: path.into() }
+impl Default for CacheConfig {
+	fn default() -> Self {
+		Self { name: "CACHE".into(), directory: ".".into() }
 	}
 }
 
-impl Default for SnapshotConfig {
-	fn default() -> Self {
-		Self { path: Path::new("SNAPSHOT").into() }
+impl CacheConfig {
+	fn path(&self) -> PathBuf {
+		Path::new(&self.directory).join(self.name.clone())
 	}
 }
 
 /// Builder for remote-externalities.
-pub struct Builder<B: BlockT> {
+pub struct Builder {
 	inject: Vec<KeyPair>,
-	mode: Mode<B>,
+	mode: Mode,
 }
 
-impl<B: BlockT> Default for Builder<B> {
+impl Default for Builder {
 	fn default() -> Self {
 		Self {
 			inject: Default::default(),
-			mode: Mode::Online(OnlineConfig::default()),
+			mode: Mode::Online(OnlineConfig::default())
 		}
 	}
 }
 
 // Mode methods
-impl<B: BlockT> Builder<B> {
-	fn as_online(&self) -> &OnlineConfig<B> {
+impl Builder {
+	fn as_online(&self) -> &OnlineConfig {
 		match &self.mode {
 			Mode::Online(config) => &config,
 			_ => panic!("Unexpected mode: Online"),
 		}
 	}
 
-	fn as_online_mut(&mut self) -> &mut OnlineConfig<B> {
+	fn as_online_mut(&mut self) -> &mut OnlineConfig {
 		match &mut self.mode {
 			Mode::Online(config) => config,
 			_ => panic!("Unexpected mode: Online"),
@@ -230,13 +234,13 @@ impl<B: BlockT> Builder<B> {
 }
 
 // RPC methods
-impl<B: BlockT> Builder<B> {
-	async fn rpc_get_head(&self) -> Result<B::Hash, &'static str> {
+impl Builder {
+	async fn rpc_get_head(&self) -> Result<Hash, &'static str> {
 		trace!(target: LOG_TARGET, "rpc: finalized_head");
-		RpcApi::<B>::finalized_head(&self.as_online().rpc()).await.map_err(|e| {
+		RpcApi::finalized_head(&self.as_online().rpc()).await.map_err(|e| {
 			error!("Error = {:?}", e);
 			"rpc finalized_head failed."
-		})
+			})
 	}
 
 	/// Relay the request to `state_getPairs` rpc endpoint.
@@ -245,28 +249,28 @@ impl<B: BlockT> Builder<B> {
 	async fn rpc_get_pairs(
 		&self,
 		prefix: StorageKey,
-		at: B::Hash,
+		at: Hash,
 	) -> Result<Vec<KeyPair>, &'static str> {
 		trace!(target: LOG_TARGET, "rpc: storage_pairs: {:?} / {:?}", prefix, at);
-		RpcApi::<B>::storage_pairs(&self.as_online().rpc(), prefix, Some(at)).await.map_err(|e| {
+		RpcApi::storage_pairs(&self.as_online().rpc(), prefix, Some(at)).await.map_err(|e| {
 			error!("Error = {:?}", e);
 			"rpc storage_pairs failed"
-		})
+			})
 	}
 }
 
 // Internal methods
-impl<B: BlockT> Builder<B> {
-	/// Save the given data as state snapshot.
-	fn save_state_snapshot(&self, data: &[KeyPair], path: &Path) -> Result<(), &'static str> {
-		info!(target: LOG_TARGET, "writing to state snapshot file {:?}", path);
+impl Builder {
+	/// Save the given data as cache.
+	fn save_cache(&self, data: &[KeyPair], path: &Path) -> Result<(), &'static str> {
+		info!(target: LOG_TARGET, "writing to cache file {:?}", path);
 		fs::write(path, data.encode()).map_err(|_| "fs::write failed.")?;
 		Ok(())
 	}
 
-	/// initialize `Self` from state snapshot. Panics if the file does not exist.
-	fn load_state_snapshot(&self, path: &Path) -> Result<Vec<KeyPair>, &'static str> {
-		info!(target: LOG_TARGET, "scraping keypairs from state snapshot {:?}", path,);
+	/// initialize `Self` from cache. Panics if the file does not exist.
+	fn load_cache(&self, path: &Path) -> Result<Vec<KeyPair>, &'static str> {
+		info!(target: LOG_TARGET, "scraping keypairs from cache {:?}", path,);
 		let bytes = fs::read(path).map_err(|_| "fs::read failed.")?;
 		Decode::decode(&mut &*bytes).map_err(|_| "decode failed")
 	}
@@ -315,12 +319,12 @@ impl<B: BlockT> Builder<B> {
 
 	async fn pre_build(mut self) -> Result<Vec<KeyPair>, &'static str> {
 		let mut base_kv = match self.mode.clone() {
-			Mode::Offline(config) => self.load_state_snapshot(&config.state_snapshot.path)?,
+			Mode::Offline(config) => self.load_cache(&config.cache.path())?,
 			Mode::Online(config) => {
 				self.init_remote_client().await?;
 				let kp = self.load_remote().await?;
-				if let Some(c) = config.state_snapshot {
-					self.save_state_snapshot(&kp, &c.path)?;
+				if let Some(c) = config.cache {
+					self.save_cache(&kp, &c.path())?;
 				}
 				kp
 			}
@@ -337,7 +341,7 @@ impl<B: BlockT> Builder<B> {
 }
 
 // Public methods
-impl<B: BlockT> Builder<B> {
+impl Builder {
 	/// Create a new builder.
 	pub fn new() -> Self {
 		Default::default()
@@ -351,8 +355,8 @@ impl<B: BlockT> Builder<B> {
 		self
 	}
 
-	/// Configure a state snapshot to be used.
-	pub fn mode(mut self, mode: Mode<B>) -> Self {
+	/// Configure a cache to be used.
+	pub fn mode(mut self, mode: Mode) -> Self {
 		self.mode = mode;
 		self
 	}
@@ -371,75 +375,62 @@ impl<B: BlockT> Builder<B> {
 	}
 }
 
+#[cfg(feature = "remote-test")]
 #[cfg(test)]
-mod test_prelude {
-	pub(crate) use super::*;
-	pub(crate) use sp_runtime::testing::{H256 as Hash, Block as RawBlock, ExtrinsicWrapper};
+mod tests {
+	use super::*;
 
-	pub(crate) type Block = RawBlock<ExtrinsicWrapper<Hash>>;
-
-	pub(crate) fn init_logger() {
+	fn init_logger() {
 		let _ = env_logger::Builder::from_default_env()
 			.format_module_path(false)
 			.format_level(true)
 			.try_init();
 	}
-}
 
-#[cfg(test)]
-mod tests {
-	use super::test_prelude::*;
-
-	#[tokio::test]
-	async fn can_load_state_snapshot() {
-		init_logger();
-		Builder::<Block>::new()
-			.mode(Mode::Offline(OfflineConfig {
-				state_snapshot: SnapshotConfig { path: "test_data/proxy_test".into() },
-			}))
-			.build()
-			.await
-			.expect("Can't read state snapshot file")
-			.execute_with(|| {});
-	}
-}
-
-#[cfg(all(test, feature = "remote-test"))]
-mod remote_tests {
-	use super::test_prelude::*;
-
-	#[tokio::test]
+	#[async_std::test]
 	async fn can_build_one_pallet() {
 		init_logger();
-		Builder::<Block>::new()
+		Builder::new()
 			.mode(Mode::Online(OnlineConfig {
 				modules: vec!["Proxy".into()],
 				..Default::default()
 			}))
 			.build()
 			.await
-			.expect("Can't reach the remote node. Is it running?")
+			.unwrap()
 			.execute_with(|| {});
 	}
 
-	#[tokio::test]
-	async fn can_create_state_snapshot() {
+	#[async_std::test]
+	async fn can_load_cache() {
 		init_logger();
-		Builder::<Block>::new()
+		Builder::new()
+			.mode(Mode::Offline(OfflineConfig {
+				cache: CacheConfig { name: "proxy_test".into(), ..Default::default() },
+			}))
+			.build()
+			.await
+			.unwrap()
+			.execute_with(|| {});
+	}
+
+	#[async_std::test]
+	async fn can_create_cache() {
+		init_logger();
+		Builder::new()
 			.mode(Mode::Online(OnlineConfig {
-				state_snapshot: Some(SnapshotConfig {
-					name: "test_snapshot_to_remove.bin".into(),
+				cache: Some(CacheConfig {
+					name: "test_cache_to_remove.bin".into(),
 					..Default::default()
 				}),
 				..Default::default()
 			}))
 			.build()
 			.await
-			.expect("Can't reach the remote node. Is it running?")
 			.unwrap()
 			.execute_with(|| {});
 
-		let to_delete = std::fs::read_dir(SnapshotConfig::default().directory)
+		let to_delete = std::fs::read_dir(CacheConfig::default().directory)
 			.unwrap()
 			.into_iter()
 			.map(|d| d.unwrap())
@@ -453,13 +444,9 @@ mod remote_tests {
 		}
 	}
 
-	#[tokio::test]
+	#[async_std::test]
 	async fn can_build_all() {
 		init_logger();
-		Builder::<Block>::new()
-			.build()
-			.await
-			.expect("Can't reach the remote node. Is it running?")
-			.execute_with(|| {});
+		Builder::new().build().await.unwrap().execute_with(|| {});
 	}
 }

@@ -16,7 +16,7 @@
 // limitations under the License.
 
 use crate::{
-	CodeHash, Event, Config, Pallet as Contracts,
+	CodeHash, Event, Config, Module as Contracts,
 	TrieId, BalanceOf, ContractInfo, gas::GasMeter, rent::Rent, storage::{self, Storage},
 	Error, ContractInfoOf, Schedule, AliveContractInfo,
 };
@@ -32,51 +32,16 @@ use frame_support::{
 	weights::Weight,
 	ensure,
 };
-use pallet_contracts_primitives::{ExecReturnValue, ReturnFlags};
+use pallet_contracts_primitives::{ErrorOrigin, ExecError, ExecReturnValue, ExecResult, ReturnFlags};
 
 pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 pub type MomentOf<T> = <<T as Config>::Time as Time>::Moment;
 pub type SeedOf<T> = <T as frame_system::Config>::Hash;
 pub type BlockNumberOf<T> = <T as frame_system::Config>::BlockNumber;
 pub type StorageKey = [u8; 32];
-pub type ExecResult = Result<ExecReturnValue, ExecError>;
 
 /// A type that represents a topic of an event. At the moment a hash is used.
 pub type TopicOf<T> = <T as frame_system::Config>::Hash;
-
-/// Origin of the error.
-///
-/// Call or instantiate both called into other contracts and pass through errors happening
-/// in those to the caller. This enum is for the caller to distinguish whether the error
-/// happened during the execution of the callee or in the current execution context.
-#[cfg_attr(test, derive(Debug, PartialEq))]
-pub enum ErrorOrigin {
-	/// Caller error origin.
-	///
-	/// The error happened in the current exeuction context rather than in the one
-	/// of the contract that is called into.
-	Caller,
-	/// The error happened during execution of the called contract.
-	Callee,
-}
-
-/// Error returned by contract exection.
-#[cfg_attr(test, derive(Debug, PartialEq))]
-pub struct ExecError {
-	/// The reason why the execution failed.
-	pub error: DispatchError,
-	/// Origin of the error.
-	pub origin: ErrorOrigin,
-}
-
-impl<T: Into<DispatchError>> From<T> for ExecError {
-	fn from(error: T) -> Self {
-		Self {
-			error: error.into(),
-			origin: ErrorOrigin::Caller,
-		}
-	}
-}
 
 /// Information needed for rent calculations that can be requested by a contract.
 #[derive(codec::Encode)]
@@ -278,7 +243,7 @@ pub trait Ext: sealing::Sealed {
 	fn tombstone_deposit(&self) -> BalanceOf<Self::T>;
 
 	/// Returns a random number for the current block with the given subject.
-	fn random(&self, subject: &[u8]) -> (SeedOf<Self::T>, BlockNumberOf<Self::T>);
+	fn random(&self, subject: &[u8]) -> SeedOf<Self::T>;
 
 	/// Deposit an event with the given topics.
 	///
@@ -419,7 +384,7 @@ where
 			depth: 0,
 			schedule,
 			timestamp: T::Time::now(),
-			block_number: <frame_system::Pallet<T>>::block_number(),
+			block_number: <frame_system::Module<T>>::block_number(),
 			_phantom: Default::default(),
 		}
 	}
@@ -880,8 +845,10 @@ where
 		self.value_transferred
 	}
 
-	fn random(&self, subject: &[u8]) -> (SeedOf<T>, BlockNumberOf<T>) {
-		T::Randomness::random(subject)
+	fn random(&self, subject: &[u8]) -> SeedOf<T> {
+		// TODO: change API to expose randomness freshness
+		// https://github.com/paritytech/substrate/issues/8297
+		T::Randomness::random(subject).0
 	}
 
 	fn now(&self) -> &MomentOf<T> {
@@ -942,7 +909,7 @@ fn deposit_event<T: Config>(
 	topics: Vec<T::Hash>,
 	event: Event<T>,
 ) {
-	<frame_system::Pallet<T>>::deposit_event_indexed(
+	<frame_system::Module<T>>::deposit_event_indexed(
 		&*topics,
 		<T as Config>::Event::from(event).into(),
 	)
@@ -972,16 +939,14 @@ mod tests {
 	use super::*;
 	use crate::{
 		gas::GasMeter, tests::{ExtBuilder, Test, Event as MetaEvent},
-		storage::{Storage, ContractAbsentError},
+		storage::Storage,
 		tests::{
 			ALICE, BOB, CHARLIE,
 			test_utils::{place_contract, set_balance, get_balance},
 		},
 		exec::ExportedFunction::*,
-		Error, Weight, CurrentSchedule,
+		Error, Weight,
 	};
-	use sp_core::Bytes;
-	use frame_support::assert_noop;
 	use sp_runtime::DispatchError;
 	use assert_matches::assert_matches;
 	use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -996,7 +961,7 @@ mod tests {
 	}
 
 	fn events() -> Vec<Event<Test>> {
-		<frame_system::Pallet<Test>>::events()
+		<frame_system::Module<Test>>::events()
 			.into_iter()
 			.filter_map(|meta| match meta.event {
 				MetaEvent::pallet_contracts(contract_event) => Some(contract_event),
@@ -1159,7 +1124,7 @@ mod tests {
 	}
 
 	fn exec_success() -> ExecResult {
-		Ok(ExecReturnValue { flags: ReturnFlags::empty(), data: Bytes(Vec::new()) })
+		Ok(ExecReturnValue { flags: ReturnFlags::empty(), data: Vec::new() })
 	}
 
 	#[test]
@@ -1176,7 +1141,7 @@ mod tests {
 		});
 
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			place_contract(&BOB, exec_ch);
 
@@ -1222,11 +1187,11 @@ mod tests {
 
 		let return_ch = MockLoader::insert(
 			Call,
-			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::REVERT, data: Bytes(Vec::new()) })
+			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::REVERT, data: Vec::new() })
 		);
 
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(origin.clone(), &schedule);
 			place_contract(&BOB, return_ch);
 			set_balance(&origin, 100);
@@ -1282,11 +1247,11 @@ mod tests {
 		let dest = BOB;
 		let return_ch = MockLoader::insert(
 			Call,
-			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::empty(), data: Bytes(vec![1, 2, 3, 4]) })
+			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::empty(), data: vec![1, 2, 3, 4] })
 		);
 
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(origin, &schedule);
 			place_contract(&BOB, return_ch);
 
@@ -1299,7 +1264,7 @@ mod tests {
 
 			let output = result.unwrap();
 			assert!(output.0.is_success());
-			assert_eq!(output.0.data, Bytes(vec![1, 2, 3, 4]));
+			assert_eq!(output.0.data, vec![1, 2, 3, 4]);
 		});
 	}
 
@@ -1311,11 +1276,11 @@ mod tests {
 		let dest = BOB;
 		let return_ch = MockLoader::insert(
 			Call,
-			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::REVERT, data: Bytes(vec![1, 2, 3, 4]) })
+			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::REVERT, data: vec![1, 2, 3, 4] })
 		);
 
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(origin, &schedule);
 			place_contract(&BOB, return_ch);
 
@@ -1328,7 +1293,7 @@ mod tests {
 
 			let output = result.unwrap();
 			assert!(!output.0.is_success());
-			assert_eq!(output.0.data, Bytes(vec![1, 2, 3, 4]));
+			assert_eq!(output.0.data, vec![1, 2, 3, 4]);
 		});
 	}
 
@@ -1341,7 +1306,7 @@ mod tests {
 
 		// This one tests passing the input data into a contract via call.
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			place_contract(&BOB, input_data_ch);
 
@@ -1364,7 +1329,7 @@ mod tests {
 
 		// This one tests passing the input data into a contract via instantiate.
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let subsistence = Contracts::<Test>::subsistence_threshold();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
@@ -1417,7 +1382,7 @@ mod tests {
 		});
 
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			set_balance(&BOB, 1);
 			place_contract(&BOB, recurse_ch);
@@ -1465,7 +1430,7 @@ mod tests {
 		});
 
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(origin.clone(), &schedule);
 			place_contract(&dest, bob_ch);
 			place_contract(&CHARLIE, charlie_ch);
@@ -1503,7 +1468,7 @@ mod tests {
 		});
 
 		ExtBuilder::default().build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			place_contract(&BOB, bob_ch);
 			place_contract(&CHARLIE, charlie_ch);
@@ -1524,7 +1489,7 @@ mod tests {
 		let dummy_ch = MockLoader::insert(Constructor, |_, _| exec_success());
 
 		ExtBuilder::default().existential_deposit(15).build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
 			let executable = MockExecutable::from_storage(
@@ -1548,11 +1513,11 @@ mod tests {
 	fn instantiation_work_with_success_output() {
 		let dummy_ch = MockLoader::insert(
 			Constructor,
-			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::empty(), data: Bytes(vec![80, 65, 83, 83]) })
+			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::empty(), data: vec![80, 65, 83, 83] })
 		);
 
 		ExtBuilder::default().existential_deposit(15).build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
 			let executable = MockExecutable::from_storage(
@@ -1568,7 +1533,7 @@ mod tests {
 					vec![],
 					&[],
 				),
-				Ok((address, ref output)) if output.data == Bytes(vec![80, 65, 83, 83]) => address
+				Ok((address, ref output)) if output.data == vec![80, 65, 83, 83] => address
 			);
 
 			// Check that the newly created account has the expected code hash and
@@ -1584,11 +1549,11 @@ mod tests {
 	fn instantiation_fails_with_failing_output() {
 		let dummy_ch = MockLoader::insert(
 			Constructor,
-			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::REVERT, data: Bytes(vec![70, 65, 73, 76]) })
+			|_, _| Ok(ExecReturnValue { flags: ReturnFlags::REVERT, data: vec![70, 65, 73, 76] })
 		);
 
 		ExtBuilder::default().existential_deposit(15).build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
 			let executable = MockExecutable::from_storage(
@@ -1604,14 +1569,11 @@ mod tests {
 					vec![],
 					&[],
 				),
-				Ok((address, ref output)) if output.data == Bytes(vec![70, 65, 73, 76]) => address
+				Ok((address, ref output)) if output.data == vec![70, 65, 73, 76] => address
 			);
 
 			// Check that the account has not been created.
-			assert_noop!(
-				Storage::<Test>::code_hash(&instantiated_contract_address),
-				ContractAbsentError,
-			);
+			assert!(Storage::<Test>::code_hash(&instantiated_contract_address).is_err());
 			assert!(events().is_empty());
 		});
 	}
@@ -1639,7 +1601,7 @@ mod tests {
 		});
 
 		ExtBuilder::default().existential_deposit(15).build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			set_balance(&ALICE, Contracts::<Test>::subsistence_threshold() * 100);
 			place_contract(&BOB, instantiator_ch);
@@ -1688,7 +1650,7 @@ mod tests {
 		});
 
 		ExtBuilder::default().existential_deposit(15).build().execute_with(|| {
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			set_balance(&ALICE, 1000);
 			set_balance(&BOB, 100);
@@ -1716,7 +1678,7 @@ mod tests {
 			.existential_deposit(15)
 			.build()
 			.execute_with(|| {
-				let schedule = <CurrentSchedule<Test>>::get();
+				let schedule = Contracts::current_schedule();
 				let mut ctx = MockContext::top_level(ALICE, &schedule);
 				let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
 				let executable = MockExecutable::from_storage(
@@ -1755,7 +1717,7 @@ mod tests {
 
 		ExtBuilder::default().build().execute_with(|| {
 			let subsistence = Contracts::<Test>::subsistence_threshold();
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
 			let executable = MockExecutable::from_storage(
@@ -1787,7 +1749,7 @@ mod tests {
 
 		ExtBuilder::default().build().execute_with(|| {
 			let subsistence = Contracts::<Test>::subsistence_threshold();
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
 			set_balance(&ALICE, subsistence * 10);
@@ -1835,7 +1797,7 @@ mod tests {
 
 		ExtBuilder::default().build().execute_with(|| {
 			let subsistence = Contracts::<Test>::subsistence_threshold();
-			let schedule = <CurrentSchedule<Test>>::get();
+			let schedule = Contracts::current_schedule();
 			let mut ctx = MockContext::top_level(ALICE, &schedule);
 			let mut gas_meter = GasMeter::<Test>::new(GAS_LIMIT);
 			set_balance(&ALICE, subsistence * 100);

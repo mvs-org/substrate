@@ -18,8 +18,8 @@
 //! # Multisig Module
 //! A module for doing multisig dispatch.
 //!
-//! - [`Config`]
-//! - [`Call`]
+//! - [`multisig::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
 //!
 //! ## Overview
 //!
@@ -436,8 +436,7 @@ decl_module! {
 			ensure!(m.when == timepoint, Error::<T>::WrongTimepoint);
 			ensure!(m.depositor == who, Error::<T>::NotOwner);
 
-			let err_amount = T::Currency::unreserve(&m.depositor, m.deposit);
-			debug_assert!(err_amount.is_zero());
+			let _ = T::Currency::unreserve(&m.depositor, m.deposit);
 			<Multisigs<T>>::remove(&id, &call_hash);
 			Self::clear_call(&call_hash);
 
@@ -639,8 +638,8 @@ impl<T: Config> Module<T> {
 	/// The current `Timepoint`.
 	pub fn timepoint() -> Timepoint<T::BlockNumber> {
 		Timepoint {
-			height: <system::Pallet<T>>::block_number(),
-			index: <system::Pallet<T>>::extrinsic_index().unwrap_or_default(),
+			height: <system::Module<T>>::block_number(),
+			index: <system::Module<T>>::extrinsic_index().unwrap_or_default(),
 		}
 	}
 

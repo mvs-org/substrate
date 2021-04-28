@@ -38,7 +38,7 @@ fn main() {
 	sp_tracing::try_init_simple();
 
 	rt::run(rt::lazy(|| {
-		let uri = "http://localhost:8830";
+		let uri = "http://localhost:9933";
 
 		http::connect(uri)
 			.and_then(|client: AuthorClient<Hash, Hash>| {

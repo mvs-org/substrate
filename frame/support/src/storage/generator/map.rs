@@ -165,20 +165,14 @@ impl<
 	fn translate<O: Decode, F: FnMut(K, O) -> Option<V>>(mut f: F) {
 		let prefix = G::prefix_hash();
 		let mut previous_key = prefix.clone();
-		let mut count = 0;
 		while let Some(next) = sp_io::storage::next_key(&previous_key)
 			.filter(|n| n.starts_with(&prefix))
 		{
-			count += 1;
 			previous_key = next;
 			let value = match unhashed::get::<O>(&previous_key) {
 				Some(value) => value,
 				None => {
-<<<<<<< HEAD
-					crate::debug::error!("Invalid translate: fail to decode old value {}", count);
-=======
 					log::error!("Invalid translate: fail to decode old value");
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 					continue
 				},
 			};
@@ -187,11 +181,7 @@ impl<
 			let key = match K::decode(&mut key_material) {
 				Ok(key) => key,
 				Err(_) => {
-<<<<<<< HEAD
-					crate::debug::error!("Invalid translate: fail to decode key {}", count);
-=======
 					log::error!("Invalid translate: fail to decode key");
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 					continue
 				},
 			};

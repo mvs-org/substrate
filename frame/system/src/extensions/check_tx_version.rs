@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Config, Pallet};
+use crate::{Config, Module};
 use codec::{Encode, Decode};
 use sp_runtime::{
 	traits::SignedExtension,
@@ -53,6 +53,6 @@ impl<T: Config + Send + Sync> SignedExtension for CheckTxVersion<T> {
 	const IDENTIFIER: &'static str = "CheckTxVersion";
 
 	fn additional_signed(&self) -> Result<Self::AdditionalSigned, TransactionValidityError> {
-		Ok(<Pallet<T>>::runtime_version().transaction_version)
+		Ok(<Module<T>>::runtime_version().transaction_version)
 	}
 }

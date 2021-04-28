@@ -17,8 +17,8 @@
 
 //! # Nicks Module
 //!
-//! - [`Config`]
-//! - [`Call`]
+//! - [`nicks::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
 //!
 //! ## Overview
 //!
@@ -179,8 +179,7 @@ decl_module! {
 
 			let deposit = <NameOf<T>>::take(&sender).ok_or(Error::<T>::Unnamed)?.1;
 
-			let err_amount = T::Currency::unreserve(&sender, deposit.clone());
-			debug_assert!(err_amount.is_zero());
+			let _ = T::Currency::unreserve(&sender, deposit.clone());
 
 			Self::deposit_event(RawEvent::NameCleared(sender, deposit));
 		}
@@ -258,9 +257,9 @@ mod tests {
 			NodeBlock = Block,
 			UncheckedExtrinsic = UncheckedExtrinsic,
 		{
-			System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-			Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-			Nicks: pallet_nicks::{Pallet, Call, Storage, Event<T>},
+			System: frame_system::{Module, Call, Config, Storage, Event<T>},
+			Balances: pallet_balances::{Module, Call, Storage, Config<T>, Event<T>},
+			Nicks: pallet_nicks::{Module, Call, Storage, Event<T>},
 		}
 	);
 
@@ -292,7 +291,6 @@ mod tests {
 		type OnKilledAccount = ();
 		type SystemWeightInfo = ();
 		type SS58Prefix = ();
-		type OnSetCode = ();
 	}
 	parameter_types! {
 		pub const ExistentialDeposit: u64 = 1;

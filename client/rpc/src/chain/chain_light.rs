@@ -106,7 +106,7 @@ impl<Block, Client, F> ChainBackend<Client, Block> for LightChain<Block, Client,
 					.compat()
 					.map(move |body| Some(SignedBlock {
 						block: Block::new(header, body),
-						justifications: None,
+						justification: None,
 					}))
 					.map_err(client_err)
 				),

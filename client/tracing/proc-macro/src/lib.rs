@@ -67,7 +67,7 @@ use syn::{Error, Expr, Ident, ItemFn};
 /// 2020-10-16 08:03:15  [light] 🏷 Local node identity is: 12D3KooWHX4rkWT6a6N55Km7ZnvenGdShSKPkzJ3yj9DU5nqDtWR
 /// 2020-10-16 08:03:15  [light] 📦 Highest known block at #0
 /// 2020-10-16 08:03:15  [light] 〽️ Prometheus server started at 127.0.0.1:9615
-/// 2020-10-16 08:03:15  [light] Listening for new connections on 127.0.0.1:8831.
+/// 2020-10-16 08:03:15  [light] Listening for new connections on 127.0.0.1:9944.
 /// ```
 ///
 /// # Example using the actual node name
@@ -101,7 +101,7 @@ use syn::{Error, Expr, Ident, ItemFn};
 /// 2020-10-16 08:12:58  [open-harbor-1619] 🏷 Local node identity is: 12D3KooWRzmYC8QTK1Pm8Cfvid3skTS4Hn54jc4AUtje8Rqbfgtp
 /// 2020-10-16 08:12:58  [open-harbor-1619] 📦 Highest known block at #0
 /// 2020-10-16 08:12:58  [open-harbor-1619] 〽️ Prometheus server started at 127.0.0.1:9615
-/// 2020-10-16 08:12:58  [open-harbor-1619] Listening for new connections on 127.0.0.1:8831.
+/// 2020-10-16 08:12:58  [open-harbor-1619] Listening for new connections on 127.0.0.1:9944.
 /// ```
 #[proc_macro_attribute]
 pub fn prefix_logs_with(arg: TokenStream, item: TokenStream) -> TokenStream {

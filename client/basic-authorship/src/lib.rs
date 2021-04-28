@@ -62,7 +62,6 @@
 //! 	Default::default(),
 //! 	Default::default(),
 //! 	Duration::from_secs(2),
-//! 	None,
 //! );
 //!
 //! // We wait until the proposition is performed.
@@ -73,4 +72,4 @@
 
 mod basic_authorship;
 
-pub use crate::basic_authorship::{ProposerFactory, Proposer, DEFAULT_BLOCK_SIZE_LIMIT};
+pub use crate::basic_authorship::{ProposerFactory, Proposer, DEFAULT_MAX_BLOCK_SIZE};

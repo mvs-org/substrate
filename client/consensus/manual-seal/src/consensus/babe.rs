@@ -21,7 +21,12 @@
 use super::ConsensusDataProvider;
 use crate::Error;
 use codec::Encode;
-use std::{borrow::Cow, sync::{Arc, atomic}, time::SystemTime};
+use std::{
+	any::Any,
+	borrow::Cow,
+	sync::{Arc, atomic},
+	time::SystemTime,
+};
 use sc_client_api::AuxStore;
 use sc_consensus_babe::{
 	Config, Epoch, authorship, CompatibleDigestItem, BabeIntermediate,
@@ -85,7 +90,7 @@ impl<B, C> BabeConsensusDataProvider<B, C>
 		let timestamp_provider = SlotTimestampProvider::new(client.clone())?;
 
 		provider.register_provider(timestamp_provider)?;
-		register_babe_inherent_data_provider(provider, config.slot_duration())?;
+		register_babe_inherent_data_provider(provider, config.slot_duration)?;
 
 		Ok(Self {
 			config,
@@ -97,7 +102,7 @@ impl<B, C> BabeConsensusDataProvider<B, C>
 	}
 
 	fn epoch(&self, parent: &B::Header, slot: Slot) -> Result<Epoch, Error> {
-		let epoch_changes = self.epoch_changes.shared_data();
+		let epoch_changes = self.epoch_changes.lock();
 		let epoch_descriptor = epoch_changes
 			.epoch_descriptor_for_child_of(
 				descendent_query(&*self.client),
@@ -151,7 +156,7 @@ impl<B, C> ConsensusDataProvider<B> for BabeConsensusDataProvider<B, C>
 				authority_index: 0_u32,
 			});
 
-			let mut epoch_changes = self.epoch_changes.shared_data();
+			let mut epoch_changes = self.epoch_changes.lock();
 			let epoch_descriptor = epoch_changes
 				.epoch_descriptor_for_child_of(
 					descendent_query(&*self.client),
@@ -195,7 +200,7 @@ impl<B, C> ConsensusDataProvider<B> for BabeConsensusDataProvider<B, C>
 		inherents: &InherentData
 	) -> Result<(), Error> {
 		let slot = inherents.babe_inherent_data()?;
-		let epoch_changes = self.epoch_changes.shared_data();
+		let epoch_changes = self.epoch_changes.lock();
 		let mut epoch_descriptor = epoch_changes
 			.epoch_descriptor_for_child_of(
 				descendent_query(&*self.client),
@@ -234,7 +239,7 @@ impl<B, C> ConsensusDataProvider<B> for BabeConsensusDataProvider<B, C>
 
 		params.intermediates.insert(
 			Cow::from(INTERMEDIATE_KEY),
-			Box::new(BabeIntermediate::<B> { epoch_descriptor }) as Box<_>,
+			Box::new(BabeIntermediate::<B> { epoch_descriptor }) as Box<dyn Any>,
 		);
 
 		Ok(())

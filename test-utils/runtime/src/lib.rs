@@ -190,7 +190,7 @@ impl BlindCheckable for Extrinsic {
 					Err(InvalidTransaction::BadProof.into())
 				}
 			},
-			Extrinsic::IncludeData(v) => Ok(Extrinsic::IncludeData(v)),
+			Extrinsic::IncludeData(_) => Err(InvalidTransaction::BadProof.into()),
 			Extrinsic::StorageChange(key, value) => Ok(Extrinsic::StorageChange(key, value)),
 			Extrinsic::ChangesTrieConfigUpdate(new_config) =>
 				Ok(Extrinsic::ChangesTrieConfigUpdate(new_config)),
@@ -451,13 +451,13 @@ impl From<frame_system::Event<Runtime>> for Event {
 impl frame_support::traits::PalletInfo for Runtime {
 	fn index<P: 'static>() -> Option<usize> {
 		let type_id = sp_std::any::TypeId::of::<P>();
-		if type_id == sp_std::any::TypeId::of::<system::Pallet<Runtime>>() {
+		if type_id == sp_std::any::TypeId::of::<system::Module<Runtime>>() {
 			return Some(0)
 		}
-		if type_id == sp_std::any::TypeId::of::<pallet_timestamp::Pallet<Runtime>>() {
+		if type_id == sp_std::any::TypeId::of::<pallet_timestamp::Module<Runtime>>() {
 			return Some(1)
 		}
-		if type_id == sp_std::any::TypeId::of::<pallet_babe::Pallet<Runtime>>() {
+		if type_id == sp_std::any::TypeId::of::<pallet_babe::Module<Runtime>>() {
 			return Some(2)
 		}
 
@@ -465,13 +465,13 @@ impl frame_support::traits::PalletInfo for Runtime {
 	}
 	fn name<P: 'static>() -> Option<&'static str> {
 		let type_id = sp_std::any::TypeId::of::<P>();
-		if type_id == sp_std::any::TypeId::of::<system::Pallet<Runtime>>() {
+		if type_id == sp_std::any::TypeId::of::<system::Module<Runtime>>() {
 			return Some("System")
 		}
-		if type_id == sp_std::any::TypeId::of::<pallet_timestamp::Pallet<Runtime>>() {
+		if type_id == sp_std::any::TypeId::of::<pallet_timestamp::Module<Runtime>>() {
 			return Some("Timestamp")
 		}
-		if type_id == sp_std::any::TypeId::of::<pallet_babe::Pallet<Runtime>>() {
+		if type_id == sp_std::any::TypeId::of::<pallet_babe::Module<Runtime>>() {
 			return Some("Babe")
 		}
 
@@ -514,15 +514,7 @@ impl frame_system::Config for Runtime {
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
-<<<<<<< HEAD
-	type MigrateAccount = ();
-=======
 	type SS58Prefix = ();
-<<<<<<< HEAD
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
-=======
-	type OnSetCode = ();
->>>>>>> 37e97cfec065fe4acc9712b4dd9a79ec1936fa7d
 }
 
 impl pallet_timestamp::Config for Runtime {
@@ -770,10 +762,7 @@ cfg_if! {
 			}
 
 			impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
-				fn slot_duration() -> sp_consensus_aura::SlotDuration {
-					sp_consensus_aura::SlotDuration::from_millis(1000)
-				}
-
+				fn slot_duration() -> u64 { 1000 }
 				fn authorities() -> Vec<AuraId> {
 					system::authorities().into_iter().map(|a| {
 						let authority: sr25519::Public = a.into();
@@ -790,21 +779,21 @@ cfg_if! {
 						c: (3, 10),
 						genesis_authorities: system::authorities()
 							.into_iter().map(|x|(x, 1)).collect(),
-						randomness: <pallet_babe::Pallet<Runtime>>::randomness(),
+						randomness: <pallet_babe::Module<Runtime>>::randomness(),
 						allowed_slots: AllowedSlots::PrimaryAndSecondaryPlainSlots,
 					}
 				}
 
 				fn current_epoch_start() -> Slot {
-					<pallet_babe::Pallet<Runtime>>::current_epoch_start()
+					<pallet_babe::Module<Runtime>>::current_epoch_start()
 				}
 
 				fn current_epoch() -> sp_consensus_babe::Epoch {
-					<pallet_babe::Pallet<Runtime>>::current_epoch()
+					<pallet_babe::Module<Runtime>>::current_epoch()
 				}
 
 				fn next_epoch() -> sp_consensus_babe::Epoch {
-					<pallet_babe::Pallet<Runtime>>::next_epoch()
+					<pallet_babe::Module<Runtime>>::next_epoch()
 				}
 
 				fn submit_report_equivocation_unsigned_extrinsic(
@@ -1026,15 +1015,12 @@ cfg_if! {
 				}
 
 				fn do_trace_log() {
-					log::trace!("Hey I'm runtime: {}", log::STATIC_MAX_LEVEL);
+					log::error!("Hey I'm runtime: {}", log::STATIC_MAX_LEVEL);
 				}
 			}
 
 			impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
-				fn slot_duration() -> sp_consensus_aura::SlotDuration {
-					sp_consensus_aura::SlotDuration::from_millis(1000)
-				}
-
+				fn slot_duration() -> u64 { 1000 }
 				fn authorities() -> Vec<AuraId> {
 					system::authorities().into_iter().map(|a| {
 						let authority: sr25519::Public = a.into();
@@ -1051,21 +1037,21 @@ cfg_if! {
 						c: (3, 10),
 						genesis_authorities: system::authorities()
 							.into_iter().map(|x|(x, 1)).collect(),
-						randomness: <pallet_babe::Pallet<Runtime>>::randomness(),
+						randomness: <pallet_babe::Module<Runtime>>::randomness(),
 						allowed_slots: AllowedSlots::PrimaryAndSecondaryPlainSlots,
 					}
 				}
 
 				fn current_epoch_start() -> Slot {
-					<pallet_babe::Pallet<Runtime>>::current_epoch_start()
+					<pallet_babe::Module<Runtime>>::current_epoch_start()
 				}
 
 				fn current_epoch() -> sp_consensus_babe::Epoch {
-					<pallet_babe::Pallet<Runtime>>::current_epoch()
+					<pallet_babe::Module<Runtime>>::current_epoch()
 				}
 
 				fn next_epoch() -> sp_consensus_babe::Epoch {
-					<pallet_babe::Pallet<Runtime>>::next_epoch()
+					<pallet_babe::Module<Runtime>>::next_epoch()
 				}
 
 				fn submit_report_equivocation_unsigned_extrinsic(
@@ -1269,7 +1255,7 @@ mod tests {
 			(BlockId::Hash(hash), block)
 		};
 
-		futures::executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
+		client.import(BlockOrigin::Own, block).unwrap();
 
 		// Allocation of 1024k while having ~2048k should succeed.
 		let ret = client.runtime_api().vec_with_capacity(&new_block_id, 1048576);

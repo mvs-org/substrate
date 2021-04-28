@@ -21,10 +21,9 @@ use codec::{FullCodec, Decode, EncodeLike, Encode};
 use crate::{
 	storage::{
 		StorageAppend, StorageDecodeLength,
-		bounded_vec::{BoundedVec, BoundedVecValue},
 		types::{OptionQuery, QueryKindTrait, OnEmptyGetter},
 	},
-	traits::{GetDefault, StorageInstance, Get},
+	traits::{GetDefault, StorageInstance},
 };
 use frame_metadata::{DefaultByteGetter, StorageEntryModifier};
 
@@ -58,26 +57,6 @@ where
 	}
 	fn from_query_to_optional_value(v: Self::Query) -> Option<Value> {
 		QueryKind::from_query_to_optional_value(v)
-	}
-}
-
-impl<Prefix, QueryKind, OnEmpty, VecValue, VecBound>
-	StorageValue<Prefix, BoundedVec<VecValue, VecBound>, QueryKind, OnEmpty>
-where
-	Prefix: StorageInstance,
-	QueryKind: QueryKindTrait<BoundedVec<VecValue, VecBound>, OnEmpty>,
-	OnEmpty: crate::traits::Get<QueryKind::Query> + 'static,
-	VecValue: BoundedVecValue,
-	VecBound: Get<u32>,
-{
-	/// Try and append the given item to the value in the storage.
-	///
-	/// Is only available if `Value` of the storage is [`BoundedVec`].
-	pub fn try_append<EncodeLikeItem>(item: EncodeLikeItem) -> Result<(), ()>
-	where
-		EncodeLikeItem: EncodeLike<VecValue>,
-	{
-		<Self as crate::storage::bounded_vec::TryAppendValue<VecValue, VecBound>>::try_append(item)
 	}
 }
 

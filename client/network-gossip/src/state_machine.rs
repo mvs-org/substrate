@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::iter;
 use std::time;
+use log::{debug, error, trace};
 use lru::LruCache;
 use libp2p::PeerId;
 use prometheus_endpoint::{register, Counter, PrometheusError, Registry, U64};
@@ -145,13 +146,7 @@ fn propagate<'a, B: BlockT, I>(
 
 			peer.known_messages.insert(message_hash.clone());
 
-			tracing::trace!(
-				target: "gossip",
-				to = %id,
-				%protocol,
-				?message,
-				"Propagating message",
-			);
+			trace!(target: "gossip", "Propagating to {}: {:?}", id, message);
 			network.write_notification(id.clone(), protocol.clone(), message.clone());
 		}
 	}
@@ -178,7 +173,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 		let metrics = match metrics_registry.map(Metrics::register) {
 			Some(Ok(metrics)) => Some(metrics),
 			Some(Err(e)) => {
-				tracing::debug!(target: "gossip", "Failed to register metrics: {:?}", e);
+				debug!(target: "gossip", "Failed to register metrics: {:?}", e);
 				None
 			}
 			None => None,
@@ -202,13 +197,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 			return;
 		}
 
-		tracing::trace!(
-			target:"gossip",
-			%who,
-			protocol = %self.protocol,
-			?role,
-			"Registering peer",
-		);
+		trace!(target:"gossip", "Registering {:?} {}", role, who);
 		self.peers.insert(who.clone(), PeerConsensus {
 			known_messages: HashSet::new(),
 		});
@@ -312,10 +301,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 			metrics.expired_messages.inc_by(expired_messages as u64)
 		}
 
-		tracing::trace!(
-			target: "gossip",
-			protocol = %self.protocol,
-			"Cleaned up {} stale messages, {} left ({} known)",
+		trace!(target: "gossip", "Cleaned up {} stale messages, {} left ({} known)",
 			expired_messages,
 			self.messages.len(),
 			known_messages.len(),
@@ -345,25 +331,14 @@ impl<B: BlockT> ConsensusGossip<B> {
 		let mut to_forward = vec![];
 
 		if !messages.is_empty() {
-			tracing::trace!(
-				target: "gossip",
-				messages_num = %messages.len(),
-				%who,
-				protocol = %self.protocol,
-				"Received messages from peer",
-			);
+			trace!(target: "gossip", "Received {} messages from peer {}", messages.len(), who);
 		}
 
 		for message in messages {
 			let message_hash = HashFor::<B>::hash(&message[..]);
 
 			if self.known_messages.contains(&message_hash) {
-				tracing::trace!(
-					target: "gossip",
-					%who,
-					protocol = %self.protocol,
-					"Ignored already known message",
-				);
+				trace!(target:"gossip", "Ignored already known message from {}", who);
 				network.report_peer(who.clone(), rep::DUPLICATE_GOSSIP);
 				continue;
 			}
@@ -379,12 +354,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 				ValidationResult::ProcessAndKeep(topic) => (topic, true),
 				ValidationResult::ProcessAndDiscard(topic) => (topic, false),
 				ValidationResult::Discard => {
-					tracing::trace!(
-						target: "gossip",
-						%who,
-						protocol = %self.protocol,
-						"Discard message from peer",
-					);
+					trace!(target:"gossip", "Discard message from peer {}", who);
 					continue;
 				},
 			};
@@ -392,12 +362,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 			let peer = match self.peers.get_mut(&who) {
 				Some(peer) => peer,
 				None => {
-					tracing::error!(
-						target: "gossip",
-						%who,
-						protocol = %self.protocol,
-						"Got message from unregistered peer",
-					);
+					error!(target:"gossip", "Got message from unregistered peer {}", who);
 					continue;
 				}
 			};
@@ -450,13 +415,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 
 				peer.known_messages.insert(entry.message_hash.clone());
 
-				tracing::trace!(
-					target: "gossip",
-					to = %who,
-					protocol = %self.protocol,
-					?entry.message,
-					"Sending topic message",
-				);
+				trace!(target: "gossip", "Sending topic message to {}: {:?}", who, entry.message);
 				network.write_notification(who.clone(), self.protocol.clone(), entry.message.clone());
 			}
 		}
@@ -498,13 +457,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 
 		let message_hash = HashFor::<B>::hash(&message);
 
-		tracing::trace!(
-			target: "gossip",
-			to = %who,
-			protocol = %self.protocol,
-			?message,
-			"Sending direct message",
-		);
+		trace!(target: "gossip", "Sending direct to {}: {:?}", who, message);
 
 		peer.known_messages.insert(message_hash);
 		network.write_notification(who.clone(), self.protocol.clone(), message);

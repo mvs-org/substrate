@@ -18,6 +18,8 @@
 
 //! Schema for BABE epoch changes in the aux-db.
 
+use std::sync::Arc;
+use parking_lot::Mutex;
 use log::info;
 use codec::{Decode, Encode};
 
@@ -77,19 +79,18 @@ pub fn load_epoch_changes<Block: BlockT, B: AuxStore>(
 		},
 	};
 
-	let epoch_changes = SharedEpochChanges::<Block, Epoch>::new(maybe_epoch_changes.unwrap_or_else(|| {
-		info!(
-			target: "babe",
-			"👶 Creating empty BABE epoch changes on what appears to be first startup.",
+	let epoch_changes = Arc::new(Mutex::new(maybe_epoch_changes.unwrap_or_else(|| {
+		info!(target: "babe",
+			  "👶 Creating empty BABE epoch changes on what appears to be first startup."
 		);
 		EpochChangesFor::<Block, Epoch>::default()
-	}));
+	})));
 
 	// rebalance the tree after deserialization. this isn't strictly necessary
 	// since the tree is now rebalanced on every update operation. but since the
 	// tree wasn't rebalanced initially it's useful to temporarily leave it here
 	// to avoid having to wait until an import for rebalancing.
-	epoch_changes.shared_data().rebalance();
+	epoch_changes.lock().rebalance();
 
 	Ok(epoch_changes)
 }
@@ -188,7 +189,7 @@ mod test {
 		).unwrap();
 
 		assert!(
-			epoch_changes.shared_data()
+			epoch_changes.lock()
 				.tree()
 				.iter()
 				.map(|(_, _, epoch)| epoch.clone())
@@ -200,7 +201,7 @@ mod test {
 		); // PersistedEpochHeader does not implement Debug, so we use assert! directly.
 
 		write_epoch_changes::<TestBlock, _, _>(
-			&epoch_changes.shared_data(),
+			&epoch_changes.lock(),
 			|values| {
 				client.insert_aux(values, &[]).unwrap();
 			},

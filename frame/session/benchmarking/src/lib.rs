@@ -35,16 +35,16 @@ use frame_system::RawOrigin;
 use pallet_session::{historical::Module as Historical, Module as Session, *};
 use pallet_staking::{
 	benchmarking::create_validator_with_nominators, testing_utils::create_validators,
-	RewardDestination,
+	MAX_NOMINATIONS, RewardDestination,
 };
 use sp_runtime::traits::{One, StaticLookup};
 
 const MAX_VALIDATORS: u32 = 1000;
 
-pub struct Pallet<T: Config>(pallet_session::Module<T>);
+pub struct Module<T: Config>(pallet_session::Module<T>);
 pub trait Config: pallet_session::Config + pallet_session::historical::Config + pallet_staking::Config {}
 
-impl<T: Config> OnInitialize<T::BlockNumber> for Pallet<T> {
+impl<T: Config> OnInitialize<T::BlockNumber> for Module<T> {
 	fn on_initialize(n: T::BlockNumber) -> frame_support::weights::Weight {
 		pallet_session::Module::<T>::on_initialize(n)
 	}
@@ -52,10 +52,10 @@ impl<T: Config> OnInitialize<T::BlockNumber> for Pallet<T> {
 
 benchmarks! {
 	set_keys {
-		let n = <T as pallet_staking::Config>::MAX_NOMINATIONS;
+		let n = MAX_NOMINATIONS as u32;
 		let (v_stash, _) = create_validator_with_nominators::<T>(
 			n,
-			<T as pallet_staking::Config>::MAX_NOMINATIONS,
+			MAX_NOMINATIONS as u32,
 			false,
 			RewardDestination::Staked,
 		)?;
@@ -68,10 +68,10 @@ benchmarks! {
 	}: _(RawOrigin::Signed(v_controller), keys, proof)
 
 	purge_keys {
-		let n = <T as pallet_staking::Config>::MAX_NOMINATIONS;
+		let n = MAX_NOMINATIONS as u32;
 		let (v_stash, _) = create_validator_with_nominators::<T>(
 			n,
-			<T as pallet_staking::Config>::MAX_NOMINATIONS,
+			MAX_NOMINATIONS as u32,
 			false,
 			RewardDestination::Staked
 		)?;
@@ -157,7 +157,7 @@ fn check_membership_proof_setup<T: Config>(
 		Session::<T>::set_keys(RawOrigin::Signed(controller).into(), keys, proof).unwrap();
 	}
 
-	Pallet::<T>::on_initialize(T::BlockNumber::one());
+	Module::<T>::on_initialize(T::BlockNumber::one());
 
 	// skip sessions until the new validator set is enacted
 	while Session::<T>::validators().len() < n as usize {
@@ -170,7 +170,7 @@ fn check_membership_proof_setup<T: Config>(
 }
 
 impl_benchmark_test_suite!(
-	Pallet,
+	Module,
 	crate::mock::new_test_ext(),
 	crate::mock::Test,
 	extra = false,

@@ -47,14 +47,12 @@ fn build_test_full_node(network_config: config::NetworkConfiguration)
 
 	#[derive(Clone)]
 	struct PassThroughVerifier(bool);
-
-	#[async_trait::async_trait]
 	impl<B: BlockT> sp_consensus::import_queue::Verifier<B> for PassThroughVerifier {
-		async fn verify(
+		fn verify(
 			&mut self,
 			origin: sp_consensus::BlockOrigin,
 			header: B::Header,
-			justifications: Option<sp_runtime::Justifications>,
+			justification: Option<sp_runtime::Justification>,
 			body: Option<Vec<B::Extrinsic>>,
 		) -> Result<
 			(
@@ -81,7 +79,7 @@ fn build_test_full_node(network_config: config::NetworkConfiguration)
 			let mut import = sp_consensus::BlockImportParams::new(origin, header);
 			import.body = body;
 			import.finalized = self.0;
-			import.justifications = justifications;
+			import.justification = justification;
 			import.fork_choice = Some(sp_consensus::ForkChoiceStrategy::LongestChain);
 			Ok((import, maybe_keys))
 		}

@@ -30,9 +30,9 @@
 //! as the [NetworkState](../../client/offchain/struct.NetworkState.html).
 //! It is submitted as an Unsigned Transaction via off-chain workers.
 //!
-//! - [`Config`]
-//! - [`Call`]
-//! - [`Module`]
+//! - [`im_online::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
+//! - [`Module`](./struct.Module.html)
 //!
 //! ## Interface
 //!
@@ -93,23 +93,12 @@ use sp_staking::{
 	offence::{ReportOffence, Offence, Kind},
 };
 use frame_support::{
-<<<<<<< HEAD
-	decl_module, decl_event, decl_storage, Parameter, debug, decl_error,
-	traits::{Get, MigrateAccount},
-	weights::Weight,
-};
-use frame_system::ensure_none;
-use frame_system::offchain::{
-	SendTransactionTypes,
-	SubmitTransaction,
-=======
 	decl_error, decl_event, decl_module, decl_storage,
 	traits::{
 		EstimateNextSessionRotation, Get, OneSessionHandler, ValidatorSet,
 		ValidatorSetWithIdentification,
 	},
 	Parameter,
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 };
 use frame_system::{ensure_none, offchain::{SendTransactionTypes, SubmitTransaction}};
 pub use weights::WeightInfo;
@@ -342,16 +331,6 @@ decl_error! {
 		InvalidKey,
 		/// Duplicated heartbeat.
 		DuplicatedHeartbeat,
-	}
-}
-
-impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
-	fn migrate_account(a: &T::AccountId) {
-		use frame_support::Blake2_256;
-		let current_index = <pallet_session::Module<T>>::current_index();
-		if let Ok(v) = a.using_encoded(|mut d| T::ValidatorId::decode(&mut d)) {
-			AuthoredBlocks::<T>::migrate_keys::<Blake2_256, Blake2_256, _, _>(current_index, v);
-		}
 	}
 }
 
@@ -689,7 +668,7 @@ impl<T: Config> OneSessionHandler<T::AccountId> for Module<T> {
 		// Tell the offchain worker to start making the next session's heartbeats.
 		// Since we consider producing blocks as being online,
 		// the heartbeat is deferred a bit to prevent spamming.
-		let block_number = <frame_system::Pallet<T>>::block_number();
+		let block_number = <frame_system::Module<T>>::block_number();
 		let half_session = T::NextSessionRotation::average_session_length() / 2u32.into();
 		<HeartbeatAfter<T>>::put(block_number + half_session);
 

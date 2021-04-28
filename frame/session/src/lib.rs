@@ -20,9 +20,9 @@
 //! The Session module allows validators to manage their session keys, provides a function for
 //! changing the session length, and handles session rotation.
 //!
-//! - [`Config`]
-//! - [`Call`]
-//! - [`Module`]
+//! - [`session::Config`](./trait.Config.html)
+//! - [`Call`](./enum.Call.html)
+//! - [`Module`](./struct.Module.html)
 //!
 //! ## Overview
 //!
@@ -125,11 +125,7 @@ use frame_support::{
 	ensure, decl_module, decl_event, decl_storage, decl_error, ConsensusEngineId, Parameter,
 	traits::{
 		Get, FindAuthor, ValidatorRegistration, EstimateNextSessionRotation, EstimateNextNewSession,
-<<<<<<< HEAD
-		MigrateAccount,
-=======
 		OneSessionHandler, ValidatorSet,
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 	},
 	dispatch::{self, DispatchResult, DispatchError},
 	weights::Weight,
@@ -446,11 +442,7 @@ decl_storage! {
 			for (account, val, keys) in config.keys.iter().cloned() {
 				<Module<T>>::inner_set_keys(&val, keys)
 					.expect("genesis config must not contain duplicates; qed");
-				assert!(
-					frame_system::Pallet::<T>::inc_consumers(&account).is_ok(),
-					"Account ({:?}) does not exist at genesis to set key. Account not endowed?",
-					account,
-				);
+				assert!(frame_system::Module::<T>::inc_consumers(&account).is_ok());
 			}
 
 			let initial_validators_0 = T::SessionManager::new_session(0)
@@ -574,54 +566,7 @@ decl_module! {
 	}
 }
 
-<<<<<<< HEAD
-mod deprecated {
-    use super::*;
-
-    decl_module! {
-        pub struct Module<T: Trait> for enum Call where origin: T::Origin { }
-    }
-    
-    decl_storage! {
-        trait Store for Module<T: Trait> as Session {
-            pub NextKeys: double_map hasher(twox_64_concat) Vec<u8>, hasher(opaque_blake2_256) T::ValidatorId
-                => Option<T::Keys>;
-            pub KeyOwner: double_map hasher(twox_64_concat) Vec<u8>, hasher(opaque_blake2_256) (KeyTypeId, Vec<u8>)
-                => Option<T::ValidatorId>;
-        }
-    }
-}
-
-const DEDUP_KEY_PREFIX: &[u8] = b":session:keys";
-
-pub fn migrate_account<T: Trait>(a: &T::AccountId) {
-    frame_support::runtime_print!("🕊️  Migrating Session Account '{:?}'", a);
-    if let Some(v) = T::ValidatorIdOf::convert(a.clone()) {
-        frame_support::runtime_print!("Validator Id '{:?}'", v);
-        if let Some(keys) = deprecated::NextKeys::<T>::take(DEDUP_KEY_PREFIX, &v) {
-            frame_support::runtime_print!("Keys '{:?}'", keys);
-            NextKeys::<T>::insert(&v, &keys);
-            for id in T::Keys::key_ids() {
-                if let Some(owner) = deprecated::KeyOwner::<T>::take(DEDUP_KEY_PREFIX, (*id, keys.get_raw(*id))) {
-                    frame_support::runtime_print!("Owner '{:?}'", owner);
-                    KeyOwner::<T>::insert((*id, keys.get_raw(*id)), owner);
-                }
-            }
-        }
-    }
-    frame_support::runtime_print!("🕊️  Done Session Account '{:?}'", a);
-}
-
-impl<T: Trait> MigrateAccount<T::AccountId> for Module<T> {
-	fn migrate_account(a: &T::AccountId) {
-		migrate_account::<T>(a)
-	}
-}
-
-impl<T: Trait> Module<T> {
-=======
 impl<T: Config> Module<T> {
->>>>>>> 42425df6a0aa85651139ffd899394b12af31da3e
 	/// Move on to next session. Register new validator set and session keys. Changes
 	/// to the validator set have a session of delay to take effect. This allows for
 	/// equivocation punishment after a fork.
@@ -801,11 +746,11 @@ impl<T: Config> Module<T> {
 		let who = T::ValidatorIdOf::convert(account.clone())
 			.ok_or(Error::<T>::NoAssociatedValidatorId)?;
 
-		ensure!(frame_system::Pallet::<T>::can_inc_consumer(&account), Error::<T>::NoAccount);
+		frame_system::Module::<T>::inc_consumers(&account).map_err(|_| Error::<T>::NoAccount)?;
 		let old_keys = Self::inner_set_keys(&who, keys)?;
-		if old_keys.is_none() {
-			let assertion = frame_system::Pallet::<T>::inc_consumers(&account).is_ok();
-			debug_assert!(assertion, "can_inc_consumer() returned true; no change since; qed");
+		if old_keys.is_some() {
+			let _ = frame_system::Module::<T>::dec_consumers(&account);
+			// ^^^ Defensive only; Consumers were incremented just before, so should never fail.
 		}
 
 		Ok(())
@@ -828,10 +773,6 @@ impl<T: Config> Module<T> {
 				Self::key_owner(*id, key).map_or(true, |owner| &owner == who),
 				Error::<T>::DuplicatedKey,
 			);
-		}
-
-		for id in T::Keys::key_ids() {
-			let key = keys.get_raw(*id);
 
 			if let Some(old) = old_keys.as_ref().map(|k| k.get_raw(*id)) {
 				if key == old {
@@ -857,7 +798,7 @@ impl<T: Config> Module<T> {
 			let key_data = old_keys.get_raw(*id);
 			Self::clear_key_owner(*id, key_data);
 		}
-		frame_system::Pallet::<T>::dec_consumers(&account);
+		frame_system::Module::<T>::dec_consumers(&account);
 
 		Ok(())
 	}
@@ -874,8 +815,7 @@ impl<T: Config> Module<T> {
 		<NextKeys<T>>::insert(v, keys);
 	}
 
-	/// Query the owner of a session key by returning the owner's validator ID.
-	pub fn key_owner(id: KeyTypeId, key_data: &[u8]) -> Option<T::ValidatorId> {
+	fn key_owner(id: KeyTypeId, key_data: &[u8]) -> Option<T::ValidatorId> {
 		<KeyOwner<T>>::get((id, key_data))
 	}
 

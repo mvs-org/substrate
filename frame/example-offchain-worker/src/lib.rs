@@ -612,17 +612,18 @@ impl<T: Config> Pallet<T> {
 	/// Returns `None` when parsing failed or `Some(price in cents)` when parsing is successful.
 	fn parse_price(price_str: &str) -> Option<u32> {
 		let val = lite_json::parse_json(price_str);
-		let price = match val.ok()? {
+		let price = val.ok().and_then(|v| match v {
 			JsonValue::Object(obj) => {
-				let (_, v) = obj.into_iter()
-					.find(|(k, _)| k.iter().copied().eq("USD".chars()))?;
-				match v {
-					JsonValue::Number(number) => number,
-					_ => return None,
-				}
+				let mut chars = "USD".chars();
+				obj.into_iter()
+					.find(|(k, _)| k.iter().all(|k| Some(*k) == chars.next()))
+					.and_then(|v| match v.1 {
+						JsonValue::Number(number) => Some(number),
+						_ => None,
+					})
 			},
-			_ => return None,
-		};
+			_ => None
+		})?;
 
 		let exp = price.fraction_length.checked_sub(2).unwrap_or(0);
 		Some(price.integer as u32 * 100 + (price.fraction / 10_u64.pow(exp)) as u32)

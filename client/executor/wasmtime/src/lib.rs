@@ -17,11 +17,12 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 ///! Defines a `WasmRuntime` that uses the Wasmtime JIT to execute.
+
 mod host;
-mod imports;
-mod instance_wrapper;
 mod runtime;
 mod state_holder;
+mod imports;
+mod instance_wrapper;
 mod util;
 
-pub use runtime::{create_runtime, prepare_runtime_artifact, CodeSupplyMode, Config, Semantics};
+pub use runtime::create_runtime;

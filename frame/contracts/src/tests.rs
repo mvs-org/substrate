@@ -16,8 +16,8 @@
 // limitations under the License.
 
 use crate::{
-	BalanceOf, ContractInfo, ContractInfoOf, Pallet,
-	Config, Schedule,
+	BalanceOf, ContractInfo, ContractInfoOf, Module,
+	RawAliveContractInfo, Config, Schedule,
 	Error, storage::Storage,
 	chain_extension::{
 		Result as ExtensionResult, Environment, ChainExtension, Ext, SysConfig, RetVal,
@@ -26,11 +26,9 @@ use crate::{
 	exec::{AccountIdOf, Executable}, wasm::PrefabWasmModule,
 	weights::WeightInfo,
 	wasm::ReturnCode as RuntimeReturnCode,
-	storage::RawAliveContractInfo,
 };
 use assert_matches::assert_matches;
 use codec::Encode;
-use sp_core::Bytes;
 use sp_runtime::{
 	traits::{BlakeTwo256, Hash, IdentityLookup, Convert},
 	testing::{Header, H256},
@@ -59,11 +57,11 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
-		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-		Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent},
-		Randomness: pallet_randomness_collective_flip::{Pallet, Call, Storage},
-		Contracts: pallet_contracts::{Pallet, Call, Config<T>, Storage, Event<T>},
+		System: frame_system::{Module, Call, Config, Storage, Event<T>},
+		Balances: pallet_balances::{Module, Call, Storage, Config<T>, Event<T>},
+		Timestamp: pallet_timestamp::{Module, Call, Storage, Inherent},
+		Randomness: pallet_randomness_collective_flip::{Module, Call, Storage},
+		Contracts: pallet_contracts::{Module, Call, Config<T>, Storage, Event<T>},
 	}
 );
 
@@ -74,7 +72,7 @@ pub mod test_utils {
 		ContractInfoOf, CodeHash,
 		storage::Storage,
 		exec::{StorageKey, AccountIdOf},
-		Pallet as Contracts,
+		Module as Contracts,
 	};
 	use frame_support::traits::Currency;
 
@@ -223,7 +221,6 @@ impl frame_system::Config for Test {
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
-	type OnSetCode = ();
 }
 impl pallet_balances::Config for Test {
 	type MaxLocks = ();
@@ -460,7 +457,7 @@ fn instantiate_and_call_and_deposit_event() {
 		.build()
 		.execute_with(|| {
 			let _ = Balances::deposit_creating(&ALICE, 1_000_000);
-			let subsistence = Pallet::<Test>::subsistence_threshold();
+			let subsistence = Module::<Test>::subsistence_threshold();
 
 			// Check at the end to get hash on error easily
 			let creation = Contracts::instantiate_with_code(
@@ -575,7 +572,7 @@ fn deposit_event_max_value_limit() {
 #[test]
 fn run_out_of_gas() {
 	let (wasm, code_hash) = compile_module::<Test>("run_out_of_gas").unwrap();
-	let subsistence = Pallet::<Test>::subsistence_threshold();
+	let subsistence = Module::<Test>::subsistence_threshold();
 
 	ExtBuilder::default()
 		.existential_deposit(50)
@@ -836,16 +833,16 @@ fn signed_claim_surcharge_contract_removals() {
 #[test]
 fn claim_surcharge_malus() {
 	// Test surcharge malus for inherent
+	claim_surcharge(9, |addr| Contracts::claim_surcharge(Origin::none(), addr, Some(ALICE)).is_ok(), true);
 	claim_surcharge(8, |addr| Contracts::claim_surcharge(Origin::none(), addr, Some(ALICE)).is_ok(), true);
 	claim_surcharge(7, |addr| Contracts::claim_surcharge(Origin::none(), addr, Some(ALICE)).is_ok(), true);
-	claim_surcharge(6, |addr| Contracts::claim_surcharge(Origin::none(), addr, Some(ALICE)).is_ok(), true);
-	claim_surcharge(5, |addr| Contracts::claim_surcharge(Origin::none(), addr, Some(ALICE)).is_ok(), false);
+	claim_surcharge(6, |addr| Contracts::claim_surcharge(Origin::none(), addr, Some(ALICE)).is_ok(), false);
 
 	// Test surcharge malus for signed
-	claim_surcharge(8, |addr| Contracts::claim_surcharge(Origin::signed(ALICE), addr, None).is_ok(), true);
+	claim_surcharge(9, |addr| Contracts::claim_surcharge(Origin::signed(ALICE), addr, None).is_ok(), true);
+	claim_surcharge(8, |addr| Contracts::claim_surcharge(Origin::signed(ALICE), addr, None).is_ok(), false);
 	claim_surcharge(7, |addr| Contracts::claim_surcharge(Origin::signed(ALICE), addr, None).is_ok(), false);
 	claim_surcharge(6, |addr| Contracts::claim_surcharge(Origin::signed(ALICE), addr, None).is_ok(), false);
-	claim_surcharge(5, |addr| Contracts::claim_surcharge(Origin::signed(ALICE), addr, None).is_ok(), false);
 }
 
 /// Claim surcharge with the given trigger_call at the given blocks.
@@ -911,7 +908,7 @@ fn removals(trigger_call: impl Fn(AccountIdOf<Test>) -> bool) {
 				.unwrap().get_alive().unwrap().rent_allowance;
 			let balance = Balances::free_balance(&addr);
 
-			let subsistence_threshold = Pallet::<Test>::subsistence_threshold();
+			let subsistence_threshold = Module::<Test>::subsistence_threshold();
 
 			// Trigger rent must have no effect
 			assert!(!trigger_call(addr.clone()));
@@ -1000,7 +997,7 @@ fn removals(trigger_call: impl Fn(AccountIdOf<Test>) -> bool) {
 		.build()
 		.execute_with(|| {
 			// Create
-			let subsistence_threshold = Pallet::<Test>::subsistence_threshold();
+			let subsistence_threshold = Module::<Test>::subsistence_threshold();
 			let _ = Balances::deposit_creating(&ALICE, subsistence_threshold * 1000);
 			assert_ok!(Contracts::instantiate_with_code(
 				Origin::signed(ALICE),
@@ -1732,7 +1729,7 @@ fn self_destruct_works() {
 				EventRecord {
 					phase: Phase::Initialization,
 					event: Event::pallet_balances(
-						pallet_balances::Event::Transfer(addr.clone(), DJANGO, 93_086)
+						pallet_balances::Event::Transfer(addr.clone(), DJANGO, 93_654)
 					),
 					topics: vec![],
 				},
@@ -1755,7 +1752,7 @@ fn self_destruct_works() {
 
 			// check that the beneficiary (django) got remaining balance
 			// some rent was deducted before termination
-			assert_eq!(Balances::free_balance(DJANGO), 1_093_086);
+			assert_eq!(Balances::free_balance(DJANGO), 1_093_654);
 		});
 }
 
@@ -1881,13 +1878,13 @@ fn crypto_hashes() {
 				// We offset data in the contract tables by 1.
 				let mut params = vec![(n + 1) as u8];
 				params.extend_from_slice(input);
-				let result = <Pallet<Test>>::bare_call(
+				let result = <Module<Test>>::bare_call(
 					ALICE,
 					addr.clone(),
 					0,
 					GAS_LIMIT,
 					params,
-				).result.unwrap();
+				).exec_result.unwrap();
 				assert!(result.is_success());
 				let expected = hash_fn(input.as_ref());
 				assert_eq!(&result.data[..*expected_size], &*expected);
@@ -1899,7 +1896,7 @@ fn crypto_hashes() {
 fn transfer_return_code() {
 	let (wasm, code_hash) = compile_module::<Test>("transfer_return_code").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 
 		assert_ok!(
@@ -1922,7 +1919,7 @@ fn transfer_return_code() {
 			0,
 			GAS_LIMIT,
 			vec![],
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::BelowSubsistenceThreshold);
 
 		// Contract has enough total balance in order to not go below the subsistence
@@ -1936,7 +1933,7 @@ fn transfer_return_code() {
 			0,
 			GAS_LIMIT,
 			vec![],
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::TransferFailed);
 	});
 }
@@ -1946,7 +1943,7 @@ fn call_return_code() {
 	let (caller_code, caller_hash) = compile_module::<Test>("call_return_code").unwrap();
 	let (callee_code, callee_hash) = compile_module::<Test>("ok_trap_revert").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 		let _ = Balances::deposit_creating(&CHARLIE, 1000 * subsistence);
 
@@ -1970,7 +1967,7 @@ fn call_return_code() {
 			0,
 			GAS_LIMIT,
 			AsRef::<[u8]>::as_ref(&DJANGO).to_vec(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::NotCallable);
 
 		assert_ok!(
@@ -1993,7 +1990,7 @@ fn call_return_code() {
 			0,
 			GAS_LIMIT,
 			AsRef::<[u8]>::as_ref(&addr_django).iter().chain(&0u32.to_le_bytes()).cloned().collect(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::BelowSubsistenceThreshold);
 
 		// Contract has enough total balance in order to not go below the subsistence
@@ -2007,7 +2004,7 @@ fn call_return_code() {
 			0,
 			GAS_LIMIT,
 			AsRef::<[u8]>::as_ref(&addr_django).iter().chain(&0u32.to_le_bytes()).cloned().collect(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::TransferFailed);
 
 		// Contract has enough balance but callee reverts because "1" is passed.
@@ -2018,7 +2015,7 @@ fn call_return_code() {
 			0,
 			GAS_LIMIT,
 			AsRef::<[u8]>::as_ref(&addr_django).iter().chain(&1u32.to_le_bytes()).cloned().collect(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::CalleeReverted);
 
 		// Contract has enough balance but callee traps because "2" is passed.
@@ -2028,7 +2025,7 @@ fn call_return_code() {
 			0,
 			GAS_LIMIT,
 			AsRef::<[u8]>::as_ref(&addr_django).iter().chain(&2u32.to_le_bytes()).cloned().collect(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::CalleeTrapped);
 
 	});
@@ -2039,7 +2036,7 @@ fn instantiate_return_code() {
 	let (caller_code, caller_hash) = compile_module::<Test>("instantiate_return_code").unwrap();
 	let (callee_code, callee_hash) = compile_module::<Test>("ok_trap_revert").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 		let _ = Balances::deposit_creating(&CHARLIE, 1000 * subsistence);
 		let callee_hash = callee_hash.as_ref().to_vec();
@@ -2075,7 +2072,7 @@ fn instantiate_return_code() {
 			0,
 			GAS_LIMIT,
 			callee_hash.clone(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::BelowSubsistenceThreshold);
 
 		// Contract has enough total balance in order to not go below the subsistence
@@ -2089,7 +2086,7 @@ fn instantiate_return_code() {
 			0,
 			GAS_LIMIT,
 			callee_hash.clone(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::TransferFailed);
 
 		// Contract has enough balance but the passed code hash is invalid
@@ -2100,7 +2097,7 @@ fn instantiate_return_code() {
 			0,
 			GAS_LIMIT,
 			vec![0; 33],
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::CodeNotFound);
 
 		// Contract has enough balance but callee reverts because "1" is passed.
@@ -2110,7 +2107,7 @@ fn instantiate_return_code() {
 			0,
 			GAS_LIMIT,
 			callee_hash.iter().chain(&1u32.to_le_bytes()).cloned().collect(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::CalleeReverted);
 
 		// Contract has enough balance but callee traps because "2" is passed.
@@ -2120,7 +2117,7 @@ fn instantiate_return_code() {
 			0,
 			GAS_LIMIT,
 			callee_hash.iter().chain(&2u32.to_le_bytes()).cloned().collect(),
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_return_code!(result, RuntimeReturnCode::CalleeTrapped);
 
 	});
@@ -2130,7 +2127,7 @@ fn instantiate_return_code() {
 fn disabled_chain_extension_wont_deploy() {
 	let (code, _hash) = compile_module::<Test>("chain_extension").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 		TestExtension::disable();
 		assert_err_ignore_postinfo!(
@@ -2151,7 +2148,7 @@ fn disabled_chain_extension_wont_deploy() {
 fn disabled_chain_extension_errors_on_call() {
 	let (code, hash) = compile_module::<Test>("chain_extension").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 		assert_ok!(
 			Contracts::instantiate_with_code(
@@ -2182,7 +2179,7 @@ fn disabled_chain_extension_errors_on_call() {
 fn chain_extension_works() {
 	let (code, hash) = compile_module::<Test>("chain_extension").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 		assert_ok!(
 			Contracts::instantiate_with_code(
@@ -2210,7 +2207,7 @@ fn chain_extension_works() {
 		);
 		let gas_consumed = result.gas_consumed;
 		assert_eq!(TestExtension::last_seen_buffer(), vec![0, 99]);
-		assert_eq!(result.result.unwrap().data, Bytes(vec![0, 99]));
+		assert_eq!(result.exec_result.unwrap().data, vec![0, 99]);
 
 		// 1 = treat inputs as integer primitives and store the supplied integers
 		Contracts::bare_call(
@@ -2219,7 +2216,7 @@ fn chain_extension_works() {
 			0,
 			GAS_LIMIT,
 			vec![1],
-		).result.unwrap();
+		).exec_result.unwrap();
 		// those values passed in the fixture
 		assert_eq!(TestExtension::last_seen_inputs(), (4, 1, 16, 12));
 
@@ -2231,7 +2228,7 @@ fn chain_extension_works() {
 			GAS_LIMIT,
 			vec![2, 42],
 		);
-		assert_ok!(result.result);
+		assert_ok!(result.exec_result);
 		assert_eq!(result.gas_consumed, gas_consumed + 42);
 
 		// 3 = diverging chain extension call that sets flags to 0x1 and returns a fixed buffer
@@ -2241,9 +2238,9 @@ fn chain_extension_works() {
 			0,
 			GAS_LIMIT,
 			vec![3],
-		).result.unwrap();
+		).exec_result.unwrap();
 		assert_eq!(result.flags, ReturnFlags::REVERT);
-		assert_eq!(result.data, Bytes(vec![42, 99]));
+		assert_eq!(result.data, vec![42, 99]);
 	});
 }
 
@@ -2251,7 +2248,7 @@ fn chain_extension_works() {
 fn lazy_removal_works() {
 	let (code, hash) = compile_module::<Test>("self_destruct").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 
 		assert_ok!(
@@ -2311,7 +2308,7 @@ fn lazy_removal_partial_remove_works() {
 	let mut ext = ExtBuilder::default().existential_deposit(50).build();
 
 	let trie = ext.execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 
 		assert_ok!(
@@ -2392,7 +2389,7 @@ fn lazy_removal_partial_remove_works() {
 fn lazy_removal_does_no_run_on_full_block() {
 	let (code, hash) = compile_module::<Test>("self_destruct").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 
 		assert_ok!(
@@ -2476,7 +2473,7 @@ fn lazy_removal_does_no_run_on_full_block() {
 fn lazy_removal_does_not_use_all_weight() {
 	let (code, hash) = compile_module::<Test>("self_destruct").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 
 		assert_ok!(
@@ -2546,7 +2543,7 @@ fn lazy_removal_does_not_use_all_weight() {
 fn deletion_queue_full() {
 	let (code, hash) = compile_module::<Test>("self_destruct").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let _ = Balances::deposit_creating(&ALICE, 1000 * subsistence);
 
 		assert_ok!(
@@ -2672,7 +2669,7 @@ fn refcounter() {
 	let (wasm, code_hash) = compile_module::<Test>("self_destruct").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
 		let _ = Balances::deposit_creating(&ALICE, 1_000_000);
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 
 		// Create two contracts with the same code and check that they do in fact share it.
 		assert_ok!(Contracts::instantiate_with_code(
@@ -2744,7 +2741,7 @@ fn reinstrument_does_charge() {
 	let (wasm, code_hash) = compile_module::<Test>("return_with_data").unwrap();
 	ExtBuilder::default().existential_deposit(50).build().execute_with(|| {
 		let _ = Balances::deposit_creating(&ALICE, 1_000_000);
-		let subsistence = Pallet::<Test>::subsistence_threshold();
+		let subsistence = Module::<Test>::subsistence_threshold();
 		let zero = 0u32.to_le_bytes().encode();
 		let code_len = wasm.len() as u32;
 
@@ -2768,7 +2765,7 @@ fn reinstrument_does_charge() {
 			GAS_LIMIT,
 			zero.clone(),
 		);
-		assert!(result0.result.unwrap().is_success());
+		assert!(result0.exec_result.unwrap().is_success());
 
 		let result1 = Contracts::bare_call(
 			ALICE,
@@ -2777,7 +2774,7 @@ fn reinstrument_does_charge() {
 			GAS_LIMIT,
 			zero.clone(),
 		);
-		assert!(result1.result.unwrap().is_success());
+		assert!(result1.exec_result.unwrap().is_success());
 
 		// They should match because both where called with the same schedule.
 		assert_eq!(result0.gas_consumed, result1.gas_consumed);
@@ -2795,7 +2792,7 @@ fn reinstrument_does_charge() {
 			GAS_LIMIT,
 			zero.clone(),
 		);
-		assert!(result2.result.unwrap().is_success());
+		assert!(result2.exec_result.unwrap().is_success());
 		assert!(result2.gas_consumed > result1.gas_consumed);
 		assert_eq!(
 			result2.gas_consumed,

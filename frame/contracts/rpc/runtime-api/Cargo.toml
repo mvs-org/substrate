@@ -13,13 +13,11 @@ readme = "README.md"
 targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
-codec = { package = "parity-scale-codec", version = "2", default-features = false, features = ["derive"] }
-
-# Substrate Dependencies
-pallet-contracts-primitives = { version = "3.0.0", default-features = false, path = "../../common" }
 sp-api = { version = "3.0.0", default-features = false, path = "../../../../primitives/api" }
-sp-runtime = { version = "3.0.0", default-features = false, path = "../../../../primitives/runtime" }
+codec = { package = "parity-scale-codec", version = "2.0.0", default-features = false, features = ["derive"] }
 sp-std = { version = "3.0.0", default-features = false, path = "../../../../primitives/std" }
+sp-runtime = { version = "3.0.0", default-features = false, path = "../../../../primitives/runtime" }
+pallet-contracts-primitives = { version = "3.0.0", default-features = false, path = "../../common" }
 
 [features]
 default = ["std"]

@@ -389,7 +389,10 @@ impl Telemetry {
 	/// The `connection_message` argument is a JSON object that is sent every time the connection
 	/// (re-)establishes.
 	pub fn start_telemetry(&mut self, connection_message: ConnectionMessage) -> Result<()> {
-		let endpoints = self.endpoints.take().ok_or_else(|| Error::TelemetryAlreadyInitialized)?;
+		let endpoints = match self.endpoints.take() {
+			Some(x) => x,
+			None => return Err(Error::TelemetryAlreadyInitialized),
+		};
 
 		self.register_sender
 			.unbounded_send(Register::Telemetry {

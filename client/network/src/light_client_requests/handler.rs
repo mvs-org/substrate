@@ -48,7 +48,7 @@ use std::{
 	collections::{BTreeMap},
 	sync::Arc,
 };
-use log::{trace, debug};
+use log::debug;
 
 const LOG_TARGET: &str = "light-client-request-handler";
 
@@ -82,14 +82,9 @@ impl<B: Block> LightClientRequestHandler<B> {
 
 			match self.handle_request(peer, payload) {
 				Ok(response_data) => {
-					let response = OutgoingResponse {
-						result: Ok(response_data),
-						reputation_changes: Vec::new(),
-						sent_feedback: None
-					};
-
+					let response = OutgoingResponse { result: Ok(response_data), reputation_changes: Vec::new() };
 					match pending_response.send(response) {
-						Ok(()) => trace!(
+						Ok(()) => debug!(
 							target: LOG_TARGET,
 							"Handled light client request from {}.",
 							peer,
@@ -115,12 +110,7 @@ impl<B: Block> LightClientRequestHandler<B> {
 						_ => Vec::new(),
 					};
 
-					let response = OutgoingResponse {
-						result: Err(()),
-						reputation_changes,
-						sent_feedback: None
-					};
-
+					let response = OutgoingResponse { result: Err(()), reputation_changes };
 					if pending_response.send(response).is_err() {
 						debug!(
 							target: LOG_TARGET,

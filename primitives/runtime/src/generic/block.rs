@@ -30,7 +30,7 @@ use crate::traits::{
 	self, Member, Block as BlockT, Header as HeaderT, MaybeSerialize, MaybeMallocSizeOf,
 	NumberFor,
 };
-use crate::Justifications;
+use crate::Justification;
 
 /// Something to identify a block.
 #[derive(PartialEq, Eq, Clone, RuntimeDebug)]
@@ -112,5 +112,5 @@ pub struct SignedBlock<Block> {
 	/// Full block.
 	pub block: Block,
 	/// Block justification.
-	pub justifications: Option<Justifications>,
+	pub justification: Option<Justification>,
 }
