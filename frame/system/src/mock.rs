@@ -33,7 +33,7 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
-		System: frame_system::{Module, Call, Config, Storage, Event<T>},
+		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
 	}
 );
 
@@ -85,7 +85,7 @@ impl OnKilledAccount<u64> for RecordKilled {
 }
 
 impl Config for Test {
-	type BaseCallFilter = ();
+	type BaseCallFilter = frame_support::traits::AllowAll;
 	type BlockWeights = RuntimeBlockWeights;
 	type BlockLength = RuntimeBlockLength;
 	type Origin = Origin;
@@ -107,6 +107,7 @@ impl Config for Test {
 	type OnKilledAccount = RecordKilled;
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
+	type OnSetCode = ();
 }
 
 pub type SysEvent = frame_system::Event<Test>;

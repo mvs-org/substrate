@@ -78,25 +78,24 @@ use sp_runtime::{
 		self, CheckEqual, AtLeast32Bit, Zero, Lookup, LookupError,
 		SimpleBitOps, Hash, Member, MaybeDisplay, BadOrigin,
 		MaybeSerializeDeserialize, MaybeMallocSizeOf, StaticLookup, One, Bounded,
-		Dispatchable, AtLeast32BitUnsigned, Saturating, StoredMapError,
+		Dispatchable, AtLeast32BitUnsigned, Saturating, StoredMapError, BlockNumberProvider,
 	},
-	offchain::storage_lock::BlockNumberProvider,
 };
 
 use sp_core::{ChangesTrieConfiguration, storage::well_known_keys};
 use frame_support::{
 	Parameter, storage,
 	traits::{
-		Contains, Get, PalletInfo, OnNewAccount, OnKilledAccount, HandleLifetime,
+		SortedMembers, Get, PalletInfo, OnNewAccount, OnKilledAccount, HandleLifetime,
 		StoredMap, EnsureOrigin, OriginTrait, Filter,
 	},
 	weights::{
 		Weight, RuntimeDbWeight, DispatchInfo, DispatchClass,
 		extract_actual_weight, PerDispatchClass,
 	},
-	dispatch::DispatchResultWithPostInfo,
+	dispatch::{DispatchResultWithPostInfo, DispatchResult},
 };
-use codec::{Encode, Decode, FullCodec, EncodeLike};
+use codec::{Encode, Decode, FullCodec, EncodeLike, MaxEncodedLen};
 
 #[cfg(feature = "std")]
 use frame_support::traits::GenesisBuild;
@@ -140,6 +139,19 @@ pub type ConsumedWeight = PerDispatchClass<Weight>;
 
 pub use pallet::*;
 
+/// Do something when we should be setting the code.
+pub trait SetCode {
+	/// Set the code to the given blob.
+	fn set_code(code: Vec<u8>) -> DispatchResult;
+}
+
+impl SetCode for () {
+	fn set_code(code: Vec<u8>) -> DispatchResult {
+		storage::unhashed::put_raw(well_known_keys::CODE, &code);
+		Ok(())
+	}
+}
+
 #[frame_support::pallet]
 pub mod pallet {
 	use crate::{*, pallet_prelude::*, self as frame_system};
@@ -181,19 +193,20 @@ pub mod pallet {
 		type BlockNumber:
 			Parameter + Member + MaybeSerializeDeserialize + Debug + MaybeDisplay +
 			AtLeast32BitUnsigned + Default + Bounded + Copy + sp_std::hash::Hash +
-			sp_std::str::FromStr + MaybeMallocSizeOf;
+			sp_std::str::FromStr + MaybeMallocSizeOf + MaxEncodedLen;
 
 		/// The output of the `Hashing` function.
 		type Hash:
 			Parameter + Member + MaybeSerializeDeserialize + Debug + MaybeDisplay + SimpleBitOps + Ord
-			+ Default + Copy + CheckEqual + sp_std::hash::Hash + AsRef<[u8]> + AsMut<[u8]> + MaybeMallocSizeOf;
+			+ Default + Copy + CheckEqual + sp_std::hash::Hash + AsRef<[u8]> + AsMut<[u8]>
+			+ MaybeMallocSizeOf + MaxEncodedLen;
 
 		/// The hashing system (algorithm) being used in the runtime (e.g. Blake2).
 		type Hashing: Hash<Output=Self::Hash>;
 
 		/// The user account identifier type for the runtime.
 		type AccountId: Parameter + Member + MaybeSerializeDeserialize + Debug + MaybeDisplay + Ord
-			+ Default;
+			+ Default + MaxEncodedLen;
 
 		/// Converting trait to take a source type and convert to `AccountId`.
 		///
@@ -252,7 +265,11 @@ pub mod pallet {
 		/// that the runtime should know about the prefix in order to make use of it as
 		/// an identifier of the chain.
 		#[pallet::constant]
-		type SS58Prefix: Get<u8>;
+		type SS58Prefix: Get<u16>;
+
+		/// What to do if the user wants the code set to something. Just use `()` unless you are in
+		/// cumulus.
+		type OnSetCode: SetCode;
 	}
 
 	#[pallet::pallet]
@@ -283,7 +300,7 @@ pub mod pallet {
 		// TODO: This should only be available for testing, rather than in general usage, but
 		// that's not possible at present (since it's within the pallet macro).
 		#[pallet::weight(*_ratio * T::BlockWeights::get().max_block)]
-		pub(crate) fn fill_block(origin: OriginFor<T>, _ratio: Perbill) -> DispatchResultWithPostInfo {
+		pub fn fill_block(origin: OriginFor<T>, _ratio: Perbill) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
 			Ok(().into())
 		}
@@ -294,7 +311,7 @@ pub mod pallet {
 		/// - `O(1)`
 		/// # </weight>
 		#[pallet::weight(T::SystemWeightInfo::remark(_remark.len() as u32))]
-		pub(crate) fn remark(origin: OriginFor<T>, _remark: Vec<u8>) -> DispatchResultWithPostInfo {
+		pub fn remark(origin: OriginFor<T>, _remark: Vec<u8>) -> DispatchResultWithPostInfo {
 			ensure_signed(origin)?;
 			Ok(().into())
 		}
@@ -308,7 +325,7 @@ pub mod pallet {
 		/// - 1 write to HEAP_PAGES
 		/// # </weight>
 		#[pallet::weight((T::SystemWeightInfo::set_heap_pages(), DispatchClass::Operational))]
-		pub(crate) fn set_heap_pages(origin: OriginFor<T>, pages: u64) -> DispatchResultWithPostInfo {
+		pub fn set_heap_pages(origin: OriginFor<T>, pages: u64) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
 			storage::unhashed::put_raw(well_known_keys::HEAP_PAGES, &pages.encode());
 			Ok(().into())
@@ -329,7 +346,7 @@ pub mod pallet {
 			ensure_root(origin)?;
 			Self::can_set_code(&code)?;
 
-			storage::unhashed::put_raw(well_known_keys::CODE, &code);
+			T::OnSetCode::set_code(code)?;
 			Self::deposit_event(Event::CodeUpdated);
 			Ok(().into())
 		}
@@ -348,7 +365,7 @@ pub mod pallet {
 			code: Vec<u8>,
 		) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
-			storage::unhashed::put_raw(well_known_keys::CODE, &code);
+			T::OnSetCode::set_code(code)?;
 			Self::deposit_event(Event::CodeUpdated);
 			Ok(().into())
 		}
@@ -396,7 +413,7 @@ pub mod pallet {
 			T::SystemWeightInfo::set_storage(items.len() as u32),
 			DispatchClass::Operational,
 		))]
-		pub(crate) fn set_storage(origin: OriginFor<T>, items: Vec<KeyValue>) -> DispatchResultWithPostInfo {
+		pub fn set_storage(origin: OriginFor<T>, items: Vec<KeyValue>) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
 			for i in &items {
 				storage::unhashed::put_raw(&i.0, &i.1);
@@ -416,7 +433,7 @@ pub mod pallet {
 			T::SystemWeightInfo::kill_storage(keys.len() as u32),
 			DispatchClass::Operational,
 		))]
-		pub(crate) fn kill_storage(origin: OriginFor<T>, keys: Vec<Key>) -> DispatchResultWithPostInfo {
+		pub fn kill_storage(origin: OriginFor<T>, keys: Vec<Key>) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
 			for key in &keys {
 				storage::unhashed::kill(&key);
@@ -439,13 +456,13 @@ pub mod pallet {
 			T::SystemWeightInfo::kill_prefix(_subkeys.saturating_add(1)),
 			DispatchClass::Operational,
 		))]
-		pub(crate) fn kill_prefix(
+		pub fn kill_prefix(
 			origin: OriginFor<T>,
 			prefix: Key,
 			_subkeys: u32,
 		) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
-			storage::unhashed::kill_prefix(&prefix);
+			storage::unhashed::kill_prefix(&prefix, None);
 			Ok(().into())
 		}
 
@@ -456,7 +473,7 @@ pub mod pallet {
 		/// - 1 event.
 		/// # </weight>
 		#[pallet::weight(T::SystemWeightInfo::remark_with_event(remark.len() as u32))]
-		pub(crate) fn remark_with_event(origin: OriginFor<T>, remark: Vec<u8>) -> DispatchResultWithPostInfo {
+		pub fn remark_with_event(origin: OriginFor<T>, remark: Vec<u8>) -> DispatchResultWithPostInfo {
 			let who = ensure_signed(origin)?;
 			let hash = T::Hashing::hash(&remark[..]);
 			Self::deposit_event(Event::Remarked(who, hash));
@@ -563,7 +580,7 @@ pub mod pallet {
 	/// Events deposited for the current block.
 	#[pallet::storage]
 	#[pallet::getter(fn events)]
-	pub(super) type Events<T: Config> =
+	pub type Events<T: Config> =
 		StorageValue<_, Vec<EventRecord<T::Event, T::Hash>>, ValueQuery>;
 
 	/// The number of events in the `Events<T>` list.
@@ -638,7 +655,7 @@ pub mod pallet {
 	}
 }
 
-mod migrations {
+pub mod migrations {
 	use super::*;
 
 	#[allow(dead_code)]
@@ -760,7 +777,7 @@ fn hash69<T: AsMut<[u8]> + Default>() -> T {
 /// This type alias represents an index of an event.
 ///
 /// We use `u32` here because this index is used as index for `Events<T>`
-/// which can't contain more than `u32::max_value()` items.
+/// which can't contain more than `u32::MAX` items.
 type EventIndex = u32;
 
 /// Type used to encode the number of references an account has.
@@ -853,7 +870,7 @@ impl<
 pub struct EnsureSignedBy<Who, AccountId>(sp_std::marker::PhantomData<(Who, AccountId)>);
 impl<
 	O: Into<Result<RawOrigin<AccountId>, O>> + From<RawOrigin<AccountId>>,
-	Who: Contains<AccountId>,
+	Who: SortedMembers<AccountId>,
 	AccountId: PartialEq + Clone + Ord + Default,
 > EnsureOrigin<O> for EnsureSignedBy<Who, AccountId> {
 	type Success = AccountId;
@@ -1022,7 +1039,7 @@ pub enum IncRefError {
 	NoProviders,
 }
 
-impl<T: Config> Module<T> {
+impl<T: Config> Pallet<T> {
 	pub fn account_exists(who: &T::AccountId) -> bool {
 		Account::<T>::contains_key(who)
 	}
@@ -1083,7 +1100,7 @@ impl<T: Config> Module<T> {
 					(1, 0, 0) => {
 						// No providers left (and no consumers) and no sufficients. Account dead.
 
-						Module::<T>::on_killed_account(who.clone());
+						Pallet::<T>::on_killed_account(who.clone());
 						Ok(DecRefStatus::Reaped)
 					}
 					(1, c, _) if c > 0 => {
@@ -1136,7 +1153,7 @@ impl<T: Config> Module<T> {
 				}
 				match (account.sufficients, account.providers) {
 					(0, 0) | (1, 0) => {
-						Module::<T>::on_killed_account(who.clone());
+						Pallet::<T>::on_killed_account(who.clone());
 						DecRefStatus::Reaped
 					}
 					(x, _) => {
@@ -1201,9 +1218,20 @@ impl<T: Config> Module<T> {
 		Account::<T>::get(who).consumers
 	}
 
-	/// True if the account has some outstanding references.
+	/// True if the account has some outstanding consumer references.
 	pub fn is_provider_required(who: &T::AccountId) -> bool {
 		Account::<T>::get(who).consumers != 0
+	}
+
+	/// True if the account has no outstanding consumer references or more than one provider.
+	pub fn can_dec_provider(who: &T::AccountId) -> bool {
+		let a = Account::<T>::get(who);
+		a.consumers == 0 || a.providers > 1
+	}
+
+	/// True if the account has at least one provider reference.
+	pub fn can_inc_consumer(who: &T::AccountId) -> bool {
+		Account::<T>::get(who).providers > 0
 	}
 
 	/// Deposits an event into this block's event record.
@@ -1305,7 +1333,7 @@ impl<T: Config> Module<T> {
 		if let InitKind::Full = kind {
 			<Events<T>>::kill();
 			EventCount::<T>::kill();
-			<EventTopics<T>>::remove_all();
+			<EventTopics<T>>::remove_all(None);
 		}
 	}
 
@@ -1418,7 +1446,19 @@ impl<T: Config> Module<T> {
 	pub fn reset_events() {
 		<Events<T>>::kill();
 		EventCount::<T>::kill();
-		<EventTopics<T>>::remove_all();
+		<EventTopics<T>>::remove_all(None);
+	}
+
+	/// Assert the given `event` exists.
+	#[cfg(any(feature = "std", feature = "runtime-benchmarks", test))]
+	pub fn assert_has_event(event: T::Event) {
+		assert!(Self::events().iter().any(|record| record.event == event))
+	}
+
+	/// Assert the last event equal to the given `event`.
+	#[cfg(any(feature = "std", feature = "runtime-benchmarks", test))]
+	pub fn assert_last_event(event: T::Event) {
+		assert_eq!(Self::events().last().expect("events expected").event, event);
 	}
 
 	/// Return the chain's current runtime version.
@@ -1450,9 +1490,9 @@ impl<T: Config> Module<T> {
 				Ok(_) => Event::ExtrinsicSuccess(info),
 				Err(err) => {
 					log::trace!(
-						target: "runtime::system", 
-						"Extrinsic failed at block({:?}): {:?}", 
-						Self::block_number(), 
+						target: "runtime::system",
+						"Extrinsic failed at block({:?}): {:?}",
+						Self::block_number(),
 						err,
 					);
 					Event::ExtrinsicFailed(err.error, info)
@@ -1520,11 +1560,11 @@ impl<T: Config> Module<T> {
 pub struct Provider<T>(PhantomData<T>);
 impl<T: Config> HandleLifetime<T::AccountId> for Provider<T> {
 	fn created(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::inc_providers(t);
+		Pallet::<T>::inc_providers(t);
 		Ok(())
 	}
 	fn killed(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::dec_providers(t)
+		Pallet::<T>::dec_providers(t)
 			.map(|_| ())
 			.or_else(|e| match e {
 				DecRefError::ConsumerRemaining => Err(StoredMapError::ConsumerRemaining),
@@ -1536,11 +1576,11 @@ impl<T: Config> HandleLifetime<T::AccountId> for Provider<T> {
 pub struct SelfSufficient<T>(PhantomData<T>);
 impl<T: Config> HandleLifetime<T::AccountId> for SelfSufficient<T> {
 	fn created(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::inc_sufficients(t);
+		Pallet::<T>::inc_sufficients(t);
 		Ok(())
 	}
 	fn killed(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::dec_sufficients(t);
+		Pallet::<T>::dec_sufficients(t);
 		Ok(())
 	}
 }
@@ -1549,13 +1589,13 @@ impl<T: Config> HandleLifetime<T::AccountId> for SelfSufficient<T> {
 pub struct Consumer<T>(PhantomData<T>);
 impl<T: Config> HandleLifetime<T::AccountId> for Consumer<T> {
 	fn created(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::inc_consumers(t)
+		Pallet::<T>::inc_consumers(t)
 			.map_err(|e| match e {
 				IncRefError::NoProviders => StoredMapError::NoProviders
 			})
 	}
 	fn killed(t: &T::AccountId) -> Result<(), StoredMapError> {
-		Module::<T>::dec_consumers(t);
+		Pallet::<T>::dec_consumers(t);
 		Ok(())
 	}
 }

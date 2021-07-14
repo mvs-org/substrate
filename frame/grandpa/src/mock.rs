@@ -24,8 +24,7 @@ use ::grandpa as finality_grandpa;
 use codec::Encode;
 use frame_support::{
 	parameter_types,
-	traits::{KeyOwnerProofSystem, OnFinalize, OnInitialize},
-	weights::Weight,
+	traits::{KeyOwnerProofSystem, OnFinalize, OnInitialize, GenesisBuild},
 };
 use pallet_staking::EraIndex;
 use sp_core::{crypto::KeyTypeId, H256};
@@ -51,20 +50,21 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
-		System: frame_system::{Module, Call, Config, Storage, Event<T>},
-		Timestamp: pallet_timestamp::{Module, Call, Storage, Inherent},
-		Balances: pallet_balances::{Module, Call, Storage, Config<T>, Event<T>},
-		Staking: pallet_staking::{Module, Call, Config<T>, Storage, Event<T>, ValidateUnsigned},
-		Session: pallet_session::{Module, Call, Storage, Event, Config<T>},
-		Grandpa: pallet_grandpa::{Module, Call, Storage, Config, Event, ValidateUnsigned},
-		Offences: pallet_offences::{Module, Call, Storage, Event},
-		Historical: pallet_session_historical::{Module},
+		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
+		Authorship: pallet_authorship::{Pallet, Call, Storage, Inherent},
+		Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent},
+		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
+		Staking: pallet_staking::{Pallet, Call, Config<T>, Storage, Event<T>},
+		Session: pallet_session::{Pallet, Call, Storage, Event, Config<T>},
+		Grandpa: pallet_grandpa::{Pallet, Call, Storage, Config, Event, ValidateUnsigned},
+		Offences: pallet_offences::{Pallet, Storage, Event},
+		Historical: pallet_session_historical::{Pallet},
 	}
 );
 
 impl_opaque_keys! {
 	pub struct TestSessionKeys {
-		pub grandpa_authority: super::Module<Test>,
+		pub grandpa_authority: super::Pallet<Test>,
 	}
 }
 
@@ -75,7 +75,7 @@ parameter_types! {
 }
 
 impl frame_system::Config for Test {
-	type BaseCallFilter = ();
+	type BaseCallFilter = frame_support::traits::AllowAll;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type DbWeight = ();
@@ -97,6 +97,7 @@ impl frame_system::Config for Test {
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
+	type OnSetCode = ();
 }
 
 impl<C> frame_system::offchain::SendTransactionTypes<C> for Test
@@ -149,6 +150,8 @@ parameter_types! {
 
 impl pallet_balances::Config for Test {
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type Balance = u128;
 	type DustRemoval = ();
 	type Event = Event;
@@ -187,7 +190,7 @@ parameter_types! {
 	pub const RewardCurve: &'static PiecewiseLinear<'static> = &REWARD_CURVE;
 	pub const MaxNominatorRewardedPerValidator: u32 = 64;
 	pub const ElectionLookahead: u64 = 0;
-	pub const StakingUnsignedPriority: u64 = u64::max_value() / 2;
+	pub const StakingUnsignedPriority: u64 = u64::MAX / 2;
 }
 
 impl onchain::Config for Test {
@@ -199,6 +202,7 @@ impl onchain::Config for Test {
 }
 
 impl pallet_staking::Config for Test {
+	const MAX_NOMINATIONS: u32 = 16;
 	type RewardRemainder = ();
 	type CurrencyToVote = frame_support::traits::SaturatingCurrencyToVote;
 	type Event = Event;
@@ -210,29 +214,19 @@ impl pallet_staking::Config for Test {
 	type SlashDeferDuration = SlashDeferDuration;
 	type SlashCancelOrigin = frame_system::EnsureRoot<Self::AccountId>;
 	type SessionInterface = Self;
-	type UnixTime = pallet_timestamp::Module<Test>;
+	type UnixTime = pallet_timestamp::Pallet<Test>;
 	type EraPayout = pallet_staking::ConvertCurve<RewardCurve>;
 	type MaxNominatorRewardedPerValidator = MaxNominatorRewardedPerValidator;
 	type NextNewSession = Session;
-	type ElectionLookahead = ElectionLookahead;
-	type Call = Call;
-	type UnsignedPriority = StakingUnsignedPriority;
-	type MaxIterations = ();
-	type MinSolutionScoreBump = ();
-	type OffchainSolutionWeightLimit = ();
 	type ElectionProvider = onchain::OnChainSequentialPhragmen<Self>;
+	type GenesisElectionProvider = Self::ElectionProvider;
 	type WeightInfo = ();
-}
-
-parameter_types! {
-	pub OffencesWeightSoftLimit: Weight = Perbill::from_percent(60) * BlockWeights::get().max_block;
 }
 
 impl pallet_offences::Config for Test {
 	type Event = Event;
 	type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
 	type OnOffenceHandler = Staking;
-	type WeightSoftLimit = OffencesWeightSoftLimit;
 }
 
 parameter_types! {

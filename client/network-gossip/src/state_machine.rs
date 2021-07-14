@@ -23,7 +23,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::iter;
 use std::time;
-use log::{debug, error, trace};
 use lru::LruCache;
 use libp2p::PeerId;
 use prometheus_endpoint::{register, Counter, PrometheusError, Registry, U64};
@@ -42,7 +41,7 @@ use wasm_timer::Instant;
 // this cache should take about 256 KB of memory.
 const KNOWN_MESSAGES_CACHE_SIZE: usize = 8192;
 
-const REBROADCAST_INTERVAL: time::Duration = time::Duration::from_secs(30);
+const REBROADCAST_INTERVAL: time::Duration = time::Duration::from_millis(750);
 
 pub(crate) const PERIODIC_MAINTENANCE_INTERVAL: time::Duration = time::Duration::from_millis(1100);
 
@@ -146,7 +145,13 @@ fn propagate<'a, B: BlockT, I>(
 
 			peer.known_messages.insert(message_hash.clone());
 
-			trace!(target: "gossip", "Propagating to {}: {:?}", id, message);
+			tracing::trace!(
+				target: "gossip",
+				to = %id,
+				%protocol,
+				?message,
+				"Propagating message",
+			);
 			network.write_notification(id.clone(), protocol.clone(), message.clone());
 		}
 	}
@@ -173,7 +178,7 @@ impl<B: BlockT> ConsensusGossip<B> {
 		let metrics = match metrics_registry.map(Metrics::register) {
 			Some(Ok(metrics)) => Some(metrics),
 			Some(Err(e)) => {
-				debug!(target: "gossip", "Failed to register metrics: {:?}", e);
+				tracing::debug!(target: "gossip", "Failed to register metrics: {:?}", e);
 				None
 			}
 			None => None,
@@ -192,12 +197,13 @@ impl<B: BlockT> ConsensusGossip<B> {
 
 	/// Handle new connected peer.
 	pub fn new_peer(&mut self, network: &mut dyn Network<B>, who: PeerId, role: ObservedRole) {
-		// light nodes are not valid targets for consensus gossip messages
-		if role.is_light() {
-			return;
-		}
-
-		trace!(target:"gossip", "Registering {:?} {}", role, who);
+		tracing::trace!(
+			target:"gossip",
+			%who,
+			protocol = %self.protocol,
+			?role,
+			"Registering peer",
+		);
 		self.peers.insert(who.clone(), PeerConsensus {
 			known_messages: HashSet::new(),
 		});
@@ -301,7 +307,10 @@ impl<B: BlockT> ConsensusGossip<B> {
 			metrics.expired_messages.inc_by(expired_messages as u64)
 		}
 
-		trace!(target: "gossip", "Cleaned up {} stale messages, {} left ({} known)",
+		tracing::trace!(
+			target: "gossip",
+			protocol = %self.protocol,
+			"Cleaned up {} stale messages, {} left ({} known)",
 			expired_messages,
 			self.messages.len(),
 			known_messages.len(),
@@ -331,14 +340,25 @@ impl<B: BlockT> ConsensusGossip<B> {
 		let mut to_forward = vec![];
 
 		if !messages.is_empty() {
-			trace!(target: "gossip", "Received {} messages from peer {}", messages.len(), who);
+			tracing::trace!(
+				target: "gossip",
+				messages_num = %messages.len(),
+				%who,
+				protocol = %self.protocol,
+				"Received messages from peer",
+			);
 		}
 
 		for message in messages {
 			let message_hash = HashFor::<B>::hash(&message[..]);
 
 			if self.known_messages.contains(&message_hash) {
-				trace!(target:"gossip", "Ignored already known message from {}", who);
+				tracing::trace!(
+					target: "gossip",
+					%who,
+					protocol = %self.protocol,
+					"Ignored already known message",
+				);
 				network.report_peer(who.clone(), rep::DUPLICATE_GOSSIP);
 				continue;
 			}
@@ -354,7 +374,12 @@ impl<B: BlockT> ConsensusGossip<B> {
 				ValidationResult::ProcessAndKeep(topic) => (topic, true),
 				ValidationResult::ProcessAndDiscard(topic) => (topic, false),
 				ValidationResult::Discard => {
-					trace!(target:"gossip", "Discard message from peer {}", who);
+					tracing::trace!(
+						target: "gossip",
+						%who,
+						protocol = %self.protocol,
+						"Discard message from peer",
+					);
 					continue;
 				},
 			};
@@ -362,7 +387,12 @@ impl<B: BlockT> ConsensusGossip<B> {
 			let peer = match self.peers.get_mut(&who) {
 				Some(peer) => peer,
 				None => {
-					error!(target:"gossip", "Got message from unregistered peer {}", who);
+					tracing::error!(
+						target: "gossip",
+						%who,
+						protocol = %self.protocol,
+						"Got message from unregistered peer",
+					);
 					continue;
 				}
 			};
@@ -415,7 +445,13 @@ impl<B: BlockT> ConsensusGossip<B> {
 
 				peer.known_messages.insert(entry.message_hash.clone());
 
-				trace!(target: "gossip", "Sending topic message to {}: {:?}", who, entry.message);
+				tracing::trace!(
+					target: "gossip",
+					to = %who,
+					protocol = %self.protocol,
+					?entry.message,
+					"Sending topic message",
+				);
 				network.write_notification(who.clone(), self.protocol.clone(), entry.message.clone());
 			}
 		}
@@ -457,7 +493,13 @@ impl<B: BlockT> ConsensusGossip<B> {
 
 		let message_hash = HashFor::<B>::hash(&message);
 
-		trace!(target: "gossip", "Sending direct to {}: {:?}", who, message);
+		tracing::trace!(
+			target: "gossip",
+			to = %who,
+			protocol = %self.protocol,
+			?message,
+			"Sending direct message",
+		);
 
 		peer.known_messages.insert(message_hash);
 		network.write_notification(who.clone(), self.protocol.clone(), message);

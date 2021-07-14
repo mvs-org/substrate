@@ -123,7 +123,7 @@ pub mod pallet {
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 		#[pallet::weight(<T::Balance as Into<Weight>>::into(new_value.clone()))]
-		fn set_dummy(
+		pub fn set_dummy(
 			origin: OriginFor<T>,
 			#[pallet::compact] new_value: T::Balance
 		) -> DispatchResultWithPostInfo {
@@ -203,7 +203,7 @@ frame_support::parameter_types!(
 );
 
 impl frame_system::Config for Runtime {
-	type BaseCallFilter = ();
+	type BaseCallFilter = frame_support::traits::AllowAll;
 	type Origin = Origin;
 	type Index = u64;
 	type BlockNumber = u32;
@@ -225,6 +225,7 @@ impl frame_system::Config for Runtime {
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
+	type OnSetCode = ();
 }
 impl pallet::Config for Runtime {
 	type Event = Event;
@@ -247,10 +248,10 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic
 	{
-		System: frame_system::{Module, Call, Event<T>},
+		System: frame_system::{Pallet, Call, Event<T>},
 		// NOTE: name Example here is needed in order to have same module prefix
-		Example: pallet::{Module, Call, Event<T>, Config<T>, Storage},
-		PalletOld: pallet_old::{Module, Call, Event<T>, Config<T>, Storage},
+		Example: pallet::{Pallet, Call, Event<T>, Config<T>, Storage},
+		PalletOld: pallet_old::{Pallet, Call, Event<T>, Config<T>, Storage},
 	}
 );
 
@@ -265,7 +266,7 @@ mod test {
 	fn metadata() {
 		let metadata = Runtime::metadata();
 		let modules = match metadata.1 {
-			frame_metadata::RuntimeMetadata::V12(frame_metadata::RuntimeMetadataV12 {
+			frame_metadata::RuntimeMetadata::V13(frame_metadata::RuntimeMetadataV13 {
 				modules: frame_metadata::DecodeDifferent::Encode(m),
 				..
 			}) => m,

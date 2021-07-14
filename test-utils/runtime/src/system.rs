@@ -107,11 +107,11 @@ pub fn polish_block(block: &mut Block) {
 	execute_block_with_state_root_handler(block, Mode::Overwrite);
 }
 
-pub fn execute_block(mut block: Block) {
-	execute_block_with_state_root_handler(&mut block, Mode::Verify);
+pub fn execute_block(mut block: Block) -> Header {
+	execute_block_with_state_root_handler(&mut block, Mode::Verify)
 }
 
-fn execute_block_with_state_root_handler(block: &mut Block, mode: Mode) {
+fn execute_block_with_state_root_handler(block: &mut Block, mode: Mode) -> Header {
 	let header = &mut block.header;
 
 	initialize_block(header);
@@ -142,6 +142,8 @@ fn execute_block_with_state_root_handler(block: &mut Block, mode: Mode) {
 			"Transaction trie root must be valid.",
 		);
 	}
+
+	new_header
 }
 
 /// The block executor.
@@ -191,7 +193,8 @@ pub fn validate_transaction(utx: Extrinsic) -> TransactionValidity {
 /// Execute a transaction outside of the block execution function.
 /// This doesn't attempt to validate anything regarding the block.
 pub fn execute_transaction(utx: Extrinsic) -> ApplyExtrinsicResult {
-	let extrinsic_index: u32 = storage::unhashed::get(well_known_keys::EXTRINSIC_INDEX).unwrap();
+	let extrinsic_index: u32 = storage::unhashed::get(well_known_keys::EXTRINSIC_INDEX)
+		.unwrap_or_default();
 	let result = execute_transaction_backend(&utx, extrinsic_index);
 	ExtrinsicData::insert(extrinsic_index, utx.encode());
 	storage::unhashed::put(well_known_keys::EXTRINSIC_INDEX, &(extrinsic_index + 1));

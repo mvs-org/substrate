@@ -17,8 +17,8 @@
 
 //! # Aura Module
 //!
-//! - [`aura::Config`](./trait.Config.html)
-//! - [`Module`](./struct.Module.html)
+//! - [`Config`]
+//! - [`Pallet`]
 //!
 //! ## Overview
 //!
@@ -87,9 +87,6 @@ pub mod pallet {
 		}
 	}
 
-	#[pallet::call]
-	impl<T: Config> Pallet<T> {}
-
 	/// The current authority set.
 	#[pallet::storage]
 	#[pallet::getter(fn authorities)]
@@ -130,7 +127,7 @@ impl<T: Config> Pallet<T> {
 			AURA_ENGINE_ID,
 			ConsensusLog::AuthoritiesChange(new).encode()
 		);
-		<frame_system::Module<T>>::deposit_log(log.into());
+		<frame_system::Pallet<T>>::deposit_log(log.into());
 	}
 
 	fn initialize_authorities(authorities: &[T::AuthorityId]) {
@@ -194,7 +191,7 @@ impl<T: Config> OneSessionHandler<T::AccountId> for Pallet<T> {
 			ConsensusLog::<T::AuthorityId>::OnDisabled(i as AuthorityIndex).encode(),
 		);
 
-		<frame_system::Module<T>>::deposit_log(log.into());
+		<frame_system::Pallet<T>>::deposit_log(log.into());
 	}
 }
 

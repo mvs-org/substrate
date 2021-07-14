@@ -24,7 +24,7 @@ use frame_system::RawOrigin;
 use frame_support::{ensure, traits::OnFinalize};
 use frame_benchmarking::{benchmarks, TrackedStorageKey, impl_benchmark_test_suite};
 
-use crate::Module as Timestamp;
+use crate::Pallet as Timestamp;
 
 const MAX_TIME: u32 = 100;
 
@@ -35,8 +35,9 @@ benchmarks! {
 		let did_update_key = crate::DidUpdate::<T>::hashed_key().to_vec();
 		frame_benchmarking::benchmarking::add_to_whitelist(TrackedStorageKey {
 			key: did_update_key,
-			has_been_read: false,
-			has_been_written: true,
+			reads: 0,
+			writes: 1,
+			whitelisted: false,
 		});
 	}: _(RawOrigin::None, t.into())
 	verify {

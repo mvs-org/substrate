@@ -23,7 +23,7 @@
 use std::collections::{VecDeque, HashSet, HashMap};
 use std::sync::Arc;
 use std::hash::Hash as StdHash;
-use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use linked_hash_map::{LinkedHashMap, Entry};
 use hash_db::Hasher;
 use sp_runtime::traits::{Block as BlockT, Header, HashFor, NumberFor};
@@ -178,6 +178,7 @@ impl<B: BlockT> Cache<B> {
 					for a in &m.storage {
 						trace!("Reverting enacted key {:?}", HexDisplay::from(a));
 						self.lru_storage.remove(a);
+						self.lru_hashes.remove(a);
 					}
 					for a in &m.child_storage {
 						trace!("Reverting enacted child key {:?}", a);
@@ -198,6 +199,7 @@ impl<B: BlockT> Cache<B> {
 					for a in &m.storage {
 						trace!("Retracted key {:?}", HexDisplay::from(a));
 						self.lru_storage.remove(a);
+						self.lru_hashes.remove(a);
 					}
 					for a in &m.child_storage {
 						trace!("Retracted child key {:?}", a);
@@ -220,7 +222,7 @@ impl<B: BlockT> Cache<B> {
 	}
 }
 
-pub type SharedCache<B> = Arc<Mutex<Cache<B>>>;
+pub type SharedCache<B> = Arc<RwLock<Cache<B>>>;
 
 /// Fix lru storage size for hash (small 64ko).
 const FIX_LRU_HASH_SIZE: usize = 65_536;
@@ -232,7 +234,7 @@ pub fn new_shared_cache<B: BlockT>(
 ) -> SharedCache<B> {
 	let top = child_ratio.1.saturating_sub(child_ratio.0);
 	Arc::new(
-		Mutex::new(
+		RwLock::new(
 			Cache {
 				lru_storage: LRUMap(
 					LinkedHashMap::new(), 0, shared_cache_size * top / child_ratio.1
@@ -335,7 +337,7 @@ impl<B: BlockT> CacheChanges<B> {
 		commit_number: Option<NumberFor<B>>,
 		is_best: bool,
 	) {
-		let mut cache = self.shared_cache.lock();
+		let mut cache = self.shared_cache.write();
 		trace!(
 			"Syncing cache, id = (#{:?}, {:?}), parent={:?}, best={}",
 			commit_number,
@@ -525,12 +527,15 @@ impl<S: StateBackend<HashFor<B>>, B: BlockT> StateBackend<HashFor<B>> for Cachin
 
 			return Ok(entry)
 		}
-		let mut cache = self.cache.shared_cache.lock();
-		if Self::is_allowed(Some(key), None, &self.cache.parent_hash, &cache.modifications) {
-			if let Some(entry) = cache.lru_storage.get(key).map(|a| a.clone()) {
-				trace!("Found in shared cache: {:?}", HexDisplay::from(&key));
-				self.usage.tally_key_read(key, entry.as_ref(), true);
-				return Ok(entry)
+		{
+			let cache = self.cache.shared_cache.upgradable_read();
+			if Self::is_allowed(Some(key), None, &self.cache.parent_hash, &cache.modifications) {
+				let mut cache = RwLockUpgradableReadGuard::upgrade(cache);
+				if let Some(entry) = cache.lru_storage.get(key).map(|a| a.clone()) {
+					trace!("Found in shared cache: {:?}", HexDisplay::from(&key));
+					self.usage.tally_key_read(key, entry.as_ref(), true);
+					return Ok(entry)
+				}
 			}
 		}
 		trace!("Cache miss: {:?}", HexDisplay::from(&key));
@@ -546,11 +551,14 @@ impl<S: StateBackend<HashFor<B>>, B: BlockT> StateBackend<HashFor<B>> for Cachin
 			trace!("Found hash in local cache: {:?}", HexDisplay::from(&key));
 			return Ok(entry)
 		}
-		let mut cache = self.cache.shared_cache.lock();
-		if Self::is_allowed(Some(key), None, &self.cache.parent_hash, &cache.modifications) {
-			if let Some(entry) = cache.lru_hashes.get(key).map(|a| a.0.clone()) {
-				trace!("Found hash in shared cache: {:?}", HexDisplay::from(&key));
-				return Ok(entry)
+		{
+			let cache = self.cache.shared_cache.upgradable_read();
+			if Self::is_allowed(Some(key), None, &self.cache.parent_hash, &cache.modifications) {
+				let mut cache = RwLockUpgradableReadGuard::upgrade(cache);
+				if let Some(entry) = cache.lru_hashes.get(key).map(|a| a.0.clone()) {
+					trace!("Found hash in shared cache: {:?}", HexDisplay::from(&key));
+					return Ok(entry)
+				}
 			}
 		}
 		trace!("Cache hash miss: {:?}", HexDisplay::from(&key));
@@ -572,13 +580,16 @@ impl<S: StateBackend<HashFor<B>>, B: BlockT> StateBackend<HashFor<B>> for Cachin
 				self.usage.tally_child_key_read(&key, entry, true)
 			)
 		}
-		let mut cache = self.cache.shared_cache.lock();
-		if Self::is_allowed(None, Some(&key), &self.cache.parent_hash, &cache.modifications) {
-			if let Some(entry) = cache.lru_child_storage.get(&key).map(|a| a.clone()) {
-				trace!("Found in shared cache: {:?}", key);
-				return Ok(
-					self.usage.tally_child_key_read(&key, entry, true)
-				)
+		{
+			let cache = self.cache.shared_cache.upgradable_read();
+			if Self::is_allowed(None, Some(&key), &self.cache.parent_hash, &cache.modifications) {
+				let mut cache = RwLockUpgradableReadGuard::upgrade(cache);
+				if let Some(entry) = cache.lru_child_storage.get(&key).map(|a| a.clone()) {
+					trace!("Found in shared cache: {:?}", key);
+					return Ok(
+						self.usage.tally_child_key_read(&key, entry, true)
+					)
+				}
 			}
 		}
 		trace!("Cache miss: {:?}", key);
@@ -603,12 +614,24 @@ impl<S: StateBackend<HashFor<B>>, B: BlockT> StateBackend<HashFor<B>> for Cachin
 		self.state.exists_child_storage(child_info, key)
 	}
 
-	fn apply_to_child_keys_while<F: FnMut(&[u8]) -> bool>(
+	fn apply_to_key_values_while<F: FnMut(Vec<u8>, Vec<u8>) -> bool>(
 		&self,
-		child_info: &ChildInfo,
+		child_info: Option<&ChildInfo>,
+		prefix: Option<&[u8]>,
+		start_at: Option<&[u8]>,
+		f: F,
+		allow_missing: bool,
+	) -> Result<bool, Self::Error> {
+		self.state.apply_to_key_values_while(child_info, prefix, start_at, f, allow_missing)
+	}
+
+	fn apply_to_keys_while<F: FnMut(&[u8]) -> bool>(
+		&self,
+		child_info: Option<&ChildInfo>,
+		prefix: Option<&[u8]>,
 		f: F,
 	) {
-		self.state.apply_to_child_keys_while(child_info, f)
+		self.state.apply_to_keys_while(child_info, prefix, f)
 	}
 
 	fn next_storage_key(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Self::Error> {
@@ -675,7 +698,7 @@ impl<S: StateBackend<HashFor<B>>, B: BlockT> StateBackend<HashFor<B>> for Cachin
 		self.state.as_trie_backend()
 	}
 
-	fn register_overlay_stats(&mut self, stats: &sp_state_machine::StateMachineStats) {
+	fn register_overlay_stats(&self, stats: &sp_state_machine::StateMachineStats) {
 		self.overlay_stats.add(stats);
 	}
 
@@ -785,12 +808,24 @@ impl<S: StateBackend<HashFor<B>>, B: BlockT> StateBackend<HashFor<B>> for Syncin
 		self.caching_state().exists_child_storage(child_info, key)
 	}
 
-	fn apply_to_child_keys_while<F: FnMut(&[u8]) -> bool>(
+	fn apply_to_key_values_while<F: FnMut(Vec<u8>, Vec<u8>) -> bool>(
 		&self,
-		child_info: &ChildInfo,
+		child_info: Option<&ChildInfo>,
+		prefix: Option<&[u8]>,
+		start_at: Option<&[u8]>,
+		f: F,
+		allow_missing: bool,
+	) -> Result<bool, Self::Error> {
+		self.caching_state().apply_to_key_values_while(child_info, prefix, start_at, f, allow_missing)
+	}
+
+	fn apply_to_keys_while<F: FnMut(&[u8]) -> bool>(
+		&self,
+		child_info: Option<&ChildInfo>,
+		prefix: Option<&[u8]>,
 		f: F,
 	) {
-		self.caching_state().apply_to_child_keys_while(child_info, f)
+		self.caching_state().apply_to_keys_while(child_info, prefix, f)
 	}
 
 	fn next_storage_key(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Self::Error> {
@@ -860,7 +895,7 @@ impl<S: StateBackend<HashFor<B>>, B: BlockT> StateBackend<HashFor<B>> for Syncin
 			.as_trie_backend()
 	}
 
-	fn register_overlay_stats(&mut self, stats: &sp_state_machine::StateMachineStats) {
+	fn register_overlay_stats(&self, stats: &sp_state_machine::StateMachineStats) {
 		self.caching_state().register_overlay_stats(stats);
 	}
 
@@ -1186,6 +1221,47 @@ mod tests {
 	}
 
 	#[test]
+	fn reverts_storage_hash() {
+		let root_parent = H256::random();
+		let key = H256::random()[..].to_vec();
+		let h1a = H256::random();
+		let h1b = H256::random();
+
+		let shared = new_shared_cache::<Block>(256*1024, (0,1));
+		let mut backend = InMemoryBackend::<BlakeTwo256>::default();
+		backend.insert(std::iter::once((None, vec![(key.clone(), Some(vec![1]))])));
+
+		let mut s = CachingState::new(
+			backend.clone(),
+			shared.clone(),
+			Some(root_parent),
+		);
+		s.cache.sync_cache(
+			&[],
+			&[],
+			vec![(key.clone(), Some(vec![2]))],
+			vec![],
+			Some(h1a),
+			Some(1),
+			true,
+		);
+
+		let mut s = CachingState::new(
+			backend.clone(),
+			shared.clone(),
+			Some(root_parent),
+		);
+		s.cache.sync_cache(&[], &[h1a], vec![], vec![], Some(h1b), Some(1), true);
+
+		let s = CachingState::new(
+			backend.clone(),
+			shared.clone(),
+			Some(h1b),
+		);
+		assert_eq!(s.storage_hash(&key).unwrap().unwrap(), BlakeTwo256::hash(&vec![1]));
+	}
+
+	#[test]
 	fn should_track_used_size_correctly() {
 		let root_parent = H256::random();
 		let shared = new_shared_cache::<Block>(109, ((109-36), 109));
@@ -1207,7 +1283,7 @@ mod tests {
 			true,
 		);
 		// 32 key, 3 byte size
-		assert_eq!(shared.lock().used_storage_cache_size(), 35 /* bytes */);
+		assert_eq!(shared.read().used_storage_cache_size(), 35 /* bytes */);
 
 		let key = H256::random()[..].to_vec();
 		s.cache.sync_cache(
@@ -1220,7 +1296,7 @@ mod tests {
 			true,
 		);
 		// 35 + (2 * 32) key, 2 byte size
-		assert_eq!(shared.lock().used_storage_cache_size(), 101 /* bytes */);
+		assert_eq!(shared.read().used_storage_cache_size(), 101 /* bytes */);
 	}
 
 	#[test]
@@ -1246,7 +1322,7 @@ mod tests {
 			true,
 		);
 		// 32 key, 4 byte size
-		assert_eq!(shared.lock().used_storage_cache_size(), 36 /* bytes */);
+		assert_eq!(shared.read().used_storage_cache_size(), 36 /* bytes */);
 
 		let key = H256::random()[..].to_vec();
 		s.cache.sync_cache(
@@ -1259,7 +1335,7 @@ mod tests {
 			true,
 		);
 		// 32 key, 2 byte size
-		assert_eq!(shared.lock().used_storage_cache_size(), 34 /* bytes */);
+		assert_eq!(shared.read().used_storage_cache_size(), 34 /* bytes */);
 	}
 
 	#[test]
@@ -1312,7 +1388,7 @@ mod tests {
 
 		// Restart (or unknown block?), clear caches.
 		{
-			let mut cache = s.cache.shared_cache.lock();
+			let mut cache = s.cache.shared_cache.write();
 			let cache = &mut *cache;
 			cache.lru_storage.clear();
 			cache.lru_hashes.clear();
@@ -1359,7 +1435,7 @@ mod tests {
 			Some(1),
 			true,
 		);
-		assert_eq!(shared.lock().lru_storage.get(&key).unwrap(), &Some(vec![1]));
+		assert_eq!(shared.write().lru_storage.get(&key).unwrap(), &Some(vec![1]));
 
 		let mut s = CachingState::new(
 			InMemoryBackend::<BlakeTwo256>::default(),
@@ -1378,7 +1454,7 @@ mod tests {
 			false,
 		);
 
-		assert_eq!(shared.lock().lru_storage.get(&key).unwrap(), &Some(vec![1]));
+		assert_eq!(shared.write().lru_storage.get(&key).unwrap(), &Some(vec![1]));
 
 		let mut s = CachingState::new(
 			InMemoryBackend::<BlakeTwo256>::default(),
@@ -1733,7 +1809,7 @@ mod qc {
 
 							std::mem::swap(fork_chain, &mut new_fork);
 
-							self.shared.lock().sync(&retracted, &enacted);
+							self.shared.write().sync(&retracted, &enacted);
 
 							self.head_state(
 								self.canon.last()

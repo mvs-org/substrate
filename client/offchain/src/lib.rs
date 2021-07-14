@@ -94,7 +94,7 @@ impl<Client, Block: traits::Block> OffchainWorkers<Client, Block> {
 		Self {
 			client,
 			_block: PhantomData,
-			thread_pool: Mutex::new(ThreadPool::new(num_cpus::get())),
+			thread_pool: Mutex::new(ThreadPool::with_name("offchain-worker".into(), num_cpus::get())),
 			shared_client,
 		}
 	}
@@ -236,10 +236,11 @@ mod tests {
 		DefaultTestClientBuilderExt, ClientBlockImportExt,
 	};
 	use sc_transaction_pool::{BasicPool, FullChainApi};
-	use sp_transaction_pool::{TransactionPool, InPoolTransaction};
+	use sc_transaction_pool_api::{TransactionPool, InPoolTransaction};
 	use sp_consensus::BlockOrigin;
 	use sc_client_api::Backend as _;
 	use sc_block_builder::BlockBuilderProvider as _;
+	use futures::executor::block_on;
 
 	struct TestNetwork();
 
@@ -267,13 +268,13 @@ mod tests {
 		Arc<BasicPool<FullChainApi<TestClient, Block>, Block>>
 	);
 
-	impl sp_transaction_pool::OffchainSubmitTransaction<Block> for TestPool {
+	impl sc_transaction_pool_api::OffchainSubmitTransaction<Block> for TestPool {
 		fn submit_at(
 			&self,
 			at: &BlockId<Block>,
 			extrinsic: <Block as traits::Block>::Extrinsic,
 		) -> Result<(), ()> {
-			let source = sp_transaction_pool::TransactionSource::Local;
+			let source = sc_transaction_pool_api::TransactionSource::Local;
 			futures::executor::block_on(self.0.submit_one(&at, source, extrinsic))
 				.map(|_| ())
 				.map_err(|_| ())
@@ -331,7 +332,7 @@ mod tests {
 		).unwrap();
 
 		let block = block_builder.build().unwrap().block;
-		client.import(BlockOrigin::Own, block).unwrap();
+		block_on(client.import(BlockOrigin::Own, block)).unwrap();
 
 		assert_eq!(value, &offchain_db.get(sp_offchain::STORAGE_PREFIX, &key).unwrap());
 
@@ -341,7 +342,7 @@ mod tests {
 		).unwrap();
 
 		let block = block_builder.build().unwrap().block;
-		client.import(BlockOrigin::Own, block).unwrap();
+		block_on(client.import(BlockOrigin::Own, block)).unwrap();
 
 		assert!(offchain_db.get(sp_offchain::STORAGE_PREFIX, &key).is_none());
 	}

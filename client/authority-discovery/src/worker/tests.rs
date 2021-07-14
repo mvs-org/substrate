@@ -69,6 +69,7 @@ impl<Block: BlockT> HeaderBackend<Block> for TestApi {
 			finalized_number: Zero::zero(),
 			genesis_hash: Default::default(),
 			number_leaves: Default::default(),
+			finalized_state: None,
 		}
 	}
 
@@ -294,7 +295,7 @@ fn publish_discover_cycle() {
 			Default::default(),
 		);
 
-		worker.publish_ext_addresses().await.unwrap();
+		worker.publish_ext_addresses(false).await.unwrap();
 
 		// Expect authority discovery to put a new record onto the dht.
 		assert_eq!(network.put_value_call.lock().unwrap().len(), 1);

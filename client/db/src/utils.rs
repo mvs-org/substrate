@@ -49,6 +49,8 @@ pub mod meta_keys {
 	pub const BEST_BLOCK: &[u8; 4] = b"best";
 	/// Last finalized block key.
 	pub const FINALIZED_BLOCK: &[u8; 5] = b"final";
+	/// Last finalized state key.
+	pub const FINALIZED_STATE: &[u8; 6] = b"fstate";
 	/// Meta information prefix for list-based caches.
 	pub const CACHE_META_PREFIX: &[u8; 5] = b"cache";
 	/// Meta information for changes tries key.
@@ -74,6 +76,8 @@ pub struct Meta<N, H> {
 	pub finalized_number: N,
 	/// Hash of the genesis block.
 	pub genesis_hash: H,
+	/// Finalized state, if any
+	pub finalized_state: Option<(H, N)>,
 }
 
 /// A block lookup key: used for canonical lookup from block number to hash
@@ -278,7 +282,7 @@ pub fn open_database<Block: BlockT>(
 		#[cfg(feature = "with-parity-db")]
 		DatabaseSettingsSrc::ParityDb { path } => {
 			crate::parity_db::open(&path, db_type)
-				.map_err(|e| sp_blockchain::Error::Backend(format!("{:?}", e)))?
+				.map_err(|e| sp_blockchain::Error::Backend(format!("{}", e)))?
 		},
 		#[cfg(not(feature = "with-parity-db"))]
 		DatabaseSettingsSrc::ParityDb { .. } => {
@@ -391,14 +395,13 @@ pub fn read_meta<Block>(db: &dyn Database<DbHash>, col_header: u32) -> Result<
 			finalized_hash: Default::default(),
 			finalized_number: Zero::zero(),
 			genesis_hash: Default::default(),
+			finalized_state: None,
 		}),
 	};
 
 	let load_meta_block = |desc, key| -> Result<_, sp_blockchain::Error> {
-		if let Some(Some(header)) = match db.get(COLUMN_META, key) {
-				Some(id) => db.get(col_header, &id).map(|b| Block::Header::decode(&mut &b[..]).ok()),
-				None => None,
-			}
+		if let Some(Some(header)) = db.get(COLUMN_META, key)
+			.and_then(|id| db.get(col_header, &id).map(|b| Block::Header::decode(&mut &b[..]).ok()))
 		{
 			let hash = header.hash();
 			debug!(
@@ -410,12 +413,18 @@ pub fn read_meta<Block>(db: &dyn Database<DbHash>, col_header: u32) -> Result<
 			);
 			Ok((hash, *header.number()))
 		} else {
-			Ok((genesis_hash.clone(), Zero::zero()))
+			Ok((Default::default(), Zero::zero()))
 		}
 	};
 
 	let (best_hash, best_number) = load_meta_block("best", meta_keys::BEST_BLOCK)?;
 	let (finalized_hash, finalized_number) = load_meta_block("final", meta_keys::FINALIZED_BLOCK)?;
+	let (finalized_state_hash, finalized_state_number) = load_meta_block("final_state", meta_keys::FINALIZED_STATE)?;
+	let finalized_state = if finalized_state_hash != Default::default() {
+		Some((finalized_state_hash, finalized_state_number))
+	} else {
+		None
+	};
 
 	Ok(Meta {
 		best_hash,
@@ -423,6 +432,7 @@ pub fn read_meta<Block>(db: &dyn Database<DbHash>, col_header: u32) -> Result<
 		finalized_hash,
 		finalized_number,
 		genesis_hash,
+		finalized_state,
 	})
 }
 
@@ -449,10 +459,35 @@ impl DatabaseType {
 	}
 }
 
+pub(crate) struct JoinInput<'a, 'b>(&'a [u8], &'b [u8]);
+
+pub(crate) fn join_input<'a, 'b>(i1: &'a[u8], i2: &'b [u8]) -> JoinInput<'a, 'b> {
+	JoinInput(i1, i2)
+}
+
+impl<'a, 'b> codec::Input for JoinInput<'a, 'b> {
+	fn remaining_len(&mut self) -> Result<Option<usize>, codec::Error> {
+		Ok(Some(self.0.len() + self.1.len()))
+	}
+
+	fn read(&mut self, into: &mut [u8]) -> Result<(), codec::Error> {
+		let mut read = 0;
+		if self.0.len() > 0 {
+			read = std::cmp::min(self.0.len(), into.len());
+			self.0.read(&mut into[..read])?;
+		}
+		if read < into.len() {
+			self.1.read(&mut into[read..])?;
+		}
+		Ok(())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use sp_runtime::testing::{Block as RawBlock, ExtrinsicWrapper};
+	use codec::Input;
 	type Block = RawBlock<ExtrinsicWrapper<u32>>;
 
 	#[test]
@@ -468,5 +503,26 @@ mod tests {
 	fn database_type_as_str_works() {
 		assert_eq!(DatabaseType::Full.as_str(), "full");
 		assert_eq!(DatabaseType::Light.as_str(), "light");
+	}
+
+	#[test]
+	fn join_input_works() {
+		let buf1 = [1, 2, 3, 4];
+		let buf2 = [5, 6, 7, 8];
+		let mut test = [0, 0, 0];
+		let mut joined = join_input(buf1.as_ref(), buf2.as_ref());
+		assert_eq!(joined.remaining_len().unwrap(), Some(8));
+
+		joined.read(&mut test).unwrap();
+		assert_eq!(test, [1, 2, 3]);
+		assert_eq!(joined.remaining_len().unwrap(), Some(5));
+
+		joined.read(&mut test).unwrap();
+		assert_eq!(test, [4, 5, 6]);
+		assert_eq!(joined.remaining_len().unwrap(), Some(2));
+
+		joined.read(&mut test[0..2]).unwrap();
+		assert_eq!(test, [7, 8, 6]);
+		assert_eq!(joined.remaining_len().unwrap(), Some(0));
 	}
 }

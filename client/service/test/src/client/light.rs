@@ -20,7 +20,6 @@ use sc_light::{
 	call_executor::{
 		GenesisCallExecutor,
 		check_execution_proof,
-		check_execution_proof_with_make_header,
 	},
 	fetcher::LightDataChecker,
 	blockchain::{BlockchainCache, Blockchain},
@@ -28,15 +27,16 @@ use sc_light::{
 };
 use std::sync::Arc;
 use sp_runtime::{
-	traits::{BlakeTwo256, HashFor, NumberFor},
-	generic::BlockId, traits::{Block as _, Header as HeaderT}, Digest,
+	generic::BlockId,
+	traits::{BlakeTwo256, Block as _, HashFor, Header as HeaderT, NumberFor},
+	Digest, Justifications,
 };
 use std::collections::HashMap;
 use parking_lot::Mutex;
 use substrate_test_runtime_client::{
 	runtime::{Hash, Block, Header}, TestClient, ClientBlockImportExt,
 };
-use sp_api::{InitializeBlock, StorageTransactionCache, ProofRecorder};
+use sp_api::{StorageTransactionCache, ProofRecorder};
 use sp_consensus::BlockOrigin;
 use sc_executor::{NativeExecutor, WasmExecutionMethod, RuntimeVersion, NativeVersion};
 use sp_core::{H256, NativeOrEncoded, testing::TaskExecutor};
@@ -208,8 +208,6 @@ impl CallExecutor<Block> for DummyCallExecutor {
 	}
 
 	fn contextual_call<
-		'a,
-		IB: Fn() -> ClientResult<()>,
 		EM: Fn(
 			Result<NativeOrEncoded<R>, Self::Error>,
 			Result<NativeOrEncoded<R>, Self::Error>
@@ -218,7 +216,6 @@ impl CallExecutor<Block> for DummyCallExecutor {
 		NC: FnOnce() -> Result<R, sp_api::ApiError> + UnwindSafe,
 	>(
 		&self,
-		_initialize_block_fn: IB,
 		_at: &BlockId<Block>,
 		_method: &str,
 		_call_data: &[u8],
@@ -229,7 +226,6 @@ impl CallExecutor<Block> for DummyCallExecutor {
 				<Self::Backend as sc_client_api::backend::Backend<Block>>::State,
 			>
 		>>,
-		_initialize_block: InitializeBlock<'a, Block>,
 		_execution_manager: ExecutionManager<EM>,
 		_native_call: Option<NC>,
 		_proof_recorder: &Option<ProofRecorder<Block>>,
@@ -271,7 +267,7 @@ fn local_state_is_created_when_genesis_state_is_available() {
 	);
 	let mut op = backend.begin_operation().unwrap();
 	op.set_block_data(header0, None, None, NewBlockState::Final).unwrap();
-	op.reset_storage(Default::default()).unwrap();
+	op.set_genesis_state(Default::default(), true).unwrap();
 	backend.commit_operation(op).unwrap();
 
 	match backend.state_at(BlockId::Number(0)).unwrap() {
@@ -332,36 +328,41 @@ fn execution_proof_is_generated_and_checked() {
 		(remote_result, local_result)
 	}
 
-	fn execute_with_proof_failure(remote_client: &TestClient, at: u64, method: &'static str) {
+	fn execute_with_proof_failure(remote_client: &TestClient, at: u64) {
 		let remote_block_id = BlockId::Number(at);
 		let remote_header = remote_client.header(&remote_block_id).unwrap().unwrap();
 
 		// 'fetch' execution proof from remote node
 		let (_, remote_execution_proof) = remote_client.execution_proof(
 			&remote_block_id,
-			method,
-			&[]
+			"Core_initialize_block",
+			&Header::new(
+				at,
+				Default::default(),
+				Default::default(),
+				Default::default(),
+				Default::default(),
+			).encode(),
 		).unwrap();
 
 		// check remote execution proof locally
-		let execution_result = check_execution_proof_with_make_header::<_, _, BlakeTwo256, _>(
+		let execution_result = check_execution_proof::<_, _, BlakeTwo256>(
 			&local_executor(),
 			Box::new(TaskExecutor::new()),
 			&RemoteCallRequest {
 				block: substrate_test_runtime_client::runtime::Hash::default(),
-				header: remote_header,
-				method: method.into(),
-				call_data: vec![],
+				header: remote_header.clone(),
+				method: "Core_initialize_block".into(),
+				call_data: Header::new(
+					at + 1,
+					Default::default(),
+					Default::default(),
+					remote_header.hash(),
+					remote_header.digest().clone(), // this makes next header wrong
+				).encode(),
 				retry_count: None,
 			},
 			remote_execution_proof,
-			|header| <Header as HeaderT>::new(
-				at + 1,
-				Default::default(),
-				Default::default(),
-				header.hash(),
-				header.digest().clone(), // this makes next header wrong
-			),
 		);
 		match execution_result {
 			Err(sp_blockchain::Error::Execution(_)) => (),
@@ -374,11 +375,11 @@ fn execution_proof_is_generated_and_checked() {
 	for i in 1u32..3u32 {
 		let mut digest = Digest::default();
 		digest.push(sp_runtime::generic::DigestItem::Other::<H256>(i.to_le_bytes().to_vec()));
-		remote_client.import_justified(
+		futures::executor::block_on(remote_client.import_justified(
 			BlockOrigin::Own,
 			remote_client.new_block(digest).unwrap().build().unwrap().block,
-			Default::default(),
-		).unwrap();
+			Justifications::from((*b"TEST", Default::default())),
+		)).unwrap();
 	}
 
 	// check method that doesn't requires environment
@@ -388,21 +389,12 @@ fn execution_proof_is_generated_and_checked() {
 	let (remote, local) = execute(&remote_client, 2, "Core_version");
 	assert_eq!(remote, local);
 
-	// check method that requires environment
-	let (_, block) = execute(&remote_client, 0, "BlockBuilder_finalize_block");
-	let local_block: Header = Decode::decode(&mut &block[..]).unwrap();
-	assert_eq!(local_block.number, 1);
-
-	let (_, block) = execute(&remote_client, 2, "BlockBuilder_finalize_block");
-	let local_block: Header = Decode::decode(&mut &block[..]).unwrap();
-	assert_eq!(local_block.number, 3);
-
 	// check that proof check doesn't panic even if proof is incorrect AND no panic handler is set
-	execute_with_proof_failure(&remote_client, 2, "Core_version");
+	execute_with_proof_failure(&remote_client, 2);
 
 	// check that proof check doesn't panic even if proof is incorrect AND panic handler is set
 	sp_panic_handler::set("TEST", "1.2.3");
-	execute_with_proof_failure(&remote_client, 2, "Core_version");
+	execute_with_proof_failure(&remote_client, 2);
 }
 
 #[test]
@@ -539,7 +531,7 @@ fn prepare_for_header_proof_check(insert_cht: bool) -> (TestChecker, Hash, Heade
 	let mut local_headers_hashes = Vec::new();
 	for i in 0..4 {
 		let block = remote_client.new_block(Default::default()).unwrap().build().unwrap().block;
-		remote_client.import(BlockOrigin::Own, block).unwrap();
+		futures::executor::block_on(remote_client.import(BlockOrigin::Own, block)).unwrap();
 		local_headers_hashes.push(
 			remote_client.block_hash(i + 1)
 				.map_err(|_| ClientError::Backend("TestError".into()))

@@ -18,8 +18,6 @@
 
 //! Schema for BABE epoch changes in the aux-db.
 
-use std::sync::Arc;
-use parking_lot::Mutex;
 use log::info;
 use codec::{Decode, Encode};
 
@@ -34,7 +32,8 @@ const BABE_EPOCH_CHANGES_VERSION: &[u8] = b"babe_epoch_changes_version";
 const BABE_EPOCH_CHANGES_KEY: &[u8] = b"babe_epoch_changes";
 const BABE_EPOCH_CHANGES_CURRENT_VERSION: u32 = 2;
 
-fn block_weight_key<H: Encode>(block_hash: H) -> Vec<u8> {
+/// The aux storage key used to store the block weight of the given block hash.
+pub fn block_weight_key<H: Encode>(block_hash: H) -> Vec<u8> {
 	(b"block_weight", block_hash).encode()
 }
 
@@ -79,18 +78,19 @@ pub fn load_epoch_changes<Block: BlockT, B: AuxStore>(
 		},
 	};
 
-	let epoch_changes = Arc::new(Mutex::new(maybe_epoch_changes.unwrap_or_else(|| {
-		info!(target: "babe",
-			  "👶 Creating empty BABE epoch changes on what appears to be first startup."
+	let epoch_changes = SharedEpochChanges::<Block, Epoch>::new(maybe_epoch_changes.unwrap_or_else(|| {
+		info!(
+			target: "babe",
+			"👶 Creating empty BABE epoch changes on what appears to be first startup.",
 		);
 		EpochChangesFor::<Block, Epoch>::default()
-	})));
+	}));
 
 	// rebalance the tree after deserialization. this isn't strictly necessary
 	// since the tree is now rebalanced on every update operation. but since the
 	// tree wasn't rebalanced initially it's useful to temporarily leave it here
 	// to avoid having to wait until an import for rebalancing.
-	epoch_changes.lock().rebalance();
+	epoch_changes.shared_data().rebalance();
 
 	Ok(epoch_changes)
 }
@@ -189,7 +189,7 @@ mod test {
 		).unwrap();
 
 		assert!(
-			epoch_changes.lock()
+			epoch_changes.shared_data()
 				.tree()
 				.iter()
 				.map(|(_, _, epoch)| epoch.clone())
@@ -201,7 +201,7 @@ mod test {
 		); // PersistedEpochHeader does not implement Debug, so we use assert! directly.
 
 		write_epoch_changes::<TestBlock, _, _>(
-			&epoch_changes.lock(),
+			&epoch_changes.shared_data(),
 			|values| {
 				client.insert_aux(values, &[]).unwrap();
 			},

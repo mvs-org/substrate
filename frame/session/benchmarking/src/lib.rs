@@ -28,23 +28,22 @@ use sp_std::vec;
 use frame_benchmarking::{benchmarks, impl_benchmark_test_suite};
 use frame_support::{
 	codec::Decode,
-	storage::StorageValue,
 	traits::{KeyOwnerProofSystem, OnInitialize},
 };
 use frame_system::RawOrigin;
 use pallet_session::{historical::Module as Historical, Module as Session, *};
 use pallet_staking::{
 	benchmarking::create_validator_with_nominators, testing_utils::create_validators,
-	MAX_NOMINATIONS, RewardDestination,
+	RewardDestination,
 };
 use sp_runtime::traits::{One, StaticLookup};
 
 const MAX_VALIDATORS: u32 = 1000;
 
-pub struct Module<T: Config>(pallet_session::Module<T>);
+pub struct Pallet<T: Config>(pallet_session::Module<T>);
 pub trait Config: pallet_session::Config + pallet_session::historical::Config + pallet_staking::Config {}
 
-impl<T: Config> OnInitialize<T::BlockNumber> for Module<T> {
+impl<T: Config> OnInitialize<T::BlockNumber> for Pallet<T> {
 	fn on_initialize(n: T::BlockNumber) -> frame_support::weights::Weight {
 		pallet_session::Module::<T>::on_initialize(n)
 	}
@@ -52,14 +51,14 @@ impl<T: Config> OnInitialize<T::BlockNumber> for Module<T> {
 
 benchmarks! {
 	set_keys {
-		let n = MAX_NOMINATIONS as u32;
+		let n = <T as pallet_staking::Config>::MAX_NOMINATIONS;
 		let (v_stash, _) = create_validator_with_nominators::<T>(
 			n,
-			MAX_NOMINATIONS as u32,
+			<T as pallet_staking::Config>::MAX_NOMINATIONS,
 			false,
 			RewardDestination::Staked,
 		)?;
-		let v_controller = pallet_staking::Module::<T>::bonded(&v_stash).ok_or("not stash")?;
+		let v_controller = pallet_staking::Pallet::<T>::bonded(&v_stash).ok_or("not stash")?;
 		let keys = T::Keys::default();
 		let proof: Vec<u8> = vec![0,1,2,3];
 		// Whitelist controller account from further DB operations.
@@ -68,14 +67,14 @@ benchmarks! {
 	}: _(RawOrigin::Signed(v_controller), keys, proof)
 
 	purge_keys {
-		let n = MAX_NOMINATIONS as u32;
+		let n = <T as pallet_staking::Config>::MAX_NOMINATIONS;
 		let (v_stash, _) = create_validator_with_nominators::<T>(
 			n,
-			MAX_NOMINATIONS as u32,
+			<T as pallet_staking::Config>::MAX_NOMINATIONS,
 			false,
 			RewardDestination::Staked
 		)?;
-		let v_controller = pallet_staking::Module::<T>::bonded(&v_stash).ok_or("not stash")?;
+		let v_controller = pallet_staking::Pallet::<T>::bonded(&v_stash).ok_or("not stash")?;
 		let keys = T::Keys::default();
 		let proof: Vec<u8> = vec![0,1,2,3];
 		Session::<T>::set_keys(RawOrigin::Signed(v_controller.clone()).into(), keys, proof)?;
@@ -125,7 +124,7 @@ fn check_membership_proof_setup<T: Config>(
 	(sp_runtime::KeyTypeId, &'static [u8; 32]),
 	sp_session::MembershipProof,
 ) {
-	pallet_staking::ValidatorCount::put(n);
+	pallet_staking::ValidatorCount::<T>::put(n);
 
 	// create validators and set random session keys
 	for (n, who) in create_validators::<T>(n, 1000)
@@ -137,7 +136,7 @@ fn check_membership_proof_setup<T: Config>(
 		use rand::SeedableRng;
 
 		let validator = T::Lookup::lookup(who).unwrap();
-		let controller = pallet_staking::Module::<T>::bonded(validator).unwrap();
+		let controller = pallet_staking::Pallet::<T>::bonded(validator).unwrap();
 
 		let keys = {
 			let mut keys = [0u8; 128];
@@ -157,7 +156,7 @@ fn check_membership_proof_setup<T: Config>(
 		Session::<T>::set_keys(RawOrigin::Signed(controller).into(), keys, proof).unwrap();
 	}
 
-	Module::<T>::on_initialize(T::BlockNumber::one());
+	Pallet::<T>::on_initialize(T::BlockNumber::one());
 
 	// skip sessions until the new validator set is enacted
 	while Session::<T>::validators().len() < n as usize {
@@ -170,7 +169,7 @@ fn check_membership_proof_setup<T: Config>(
 }
 
 impl_benchmark_test_suite!(
-	Module,
+	Pallet,
 	crate::mock::new_test_ext(),
 	crate::mock::Test,
 	extra = false,
