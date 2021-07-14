@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,7 +44,7 @@ fn encode_with_vec_prefix<T: Encode, F: Fn(&mut Vec<u8>)>(encoder: F) -> Vec<u8>
 	let size = ::sp_std::mem::size_of::<T>();
 	let reserve = match size {
 		0..=0b00111111 => 1,
-		0..=0b00111111_11111111 => 2,
+		0b01000000..=0b00111111_11111111 => 2,
 		_ => 4,
 	};
 	let mut v = Vec::with_capacity(reserve + size);

@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,7 +32,7 @@ use sp_runtime::{
 	},
 };
 use codec::{KeyedVec, Encode, Decode};
-use frame_system::Trait;
+use frame_system::Config;
 use crate::{
 	AccountId, BlockNumber, Extrinsic, Transfer, H256 as Hash, Block, Header, Digest, AuthorityId
 };
@@ -42,11 +42,11 @@ const NONCE_OF: &[u8] = b"nonce:";
 const BALANCE_OF: &[u8] = b"balance:";
 
 decl_module! {
-	pub struct Module<T: Trait> for enum Call where origin: T::Origin {}
+	pub struct Module<T: Config> for enum Call where origin: T::Origin {}
 }
 
 decl_storage! {
-	trait Store for Module<T: Trait> as TestRuntime {
+	trait Store for Module<T: Config> as TestRuntime {
 		ExtrinsicData: map hasher(blake2_128_concat) u32 => Vec<u8>;
 		// The current block number being processed. Set by `execute_block`.
 		Number get(fn number): Option<BlockNumber>;
@@ -107,11 +107,11 @@ pub fn polish_block(block: &mut Block) {
 	execute_block_with_state_root_handler(block, Mode::Overwrite);
 }
 
-pub fn execute_block(mut block: Block) {
-	execute_block_with_state_root_handler(&mut block, Mode::Verify);
+pub fn execute_block(mut block: Block) -> Header {
+	execute_block_with_state_root_handler(&mut block, Mode::Verify)
 }
 
-fn execute_block_with_state_root_handler(block: &mut Block, mode: Mode) {
+fn execute_block_with_state_root_handler(block: &mut Block, mode: Mode) -> Header {
 	let header = &mut block.header;
 
 	initialize_block(header);
@@ -142,12 +142,14 @@ fn execute_block_with_state_root_handler(block: &mut Block, mode: Mode) {
 			"Transaction trie root must be valid.",
 		);
 	}
+
+	new_header
 }
 
 /// The block executor.
 pub struct BlockExecutor;
 
-impl frame_executive::ExecuteBlock<Block> for BlockExecutor {
+impl frame_support::traits::ExecuteBlock<Block> for BlockExecutor {
 	fn execute_block(block: Block) {
 		execute_block(block);
 	}
@@ -191,7 +193,8 @@ pub fn validate_transaction(utx: Extrinsic) -> TransactionValidity {
 /// Execute a transaction outside of the block execution function.
 /// This doesn't attempt to validate anything regarding the block.
 pub fn execute_transaction(utx: Extrinsic) -> ApplyExtrinsicResult {
-	let extrinsic_index: u32 = storage::unhashed::get(well_known_keys::EXTRINSIC_INDEX).unwrap();
+	let extrinsic_index: u32 = storage::unhashed::get(well_known_keys::EXTRINSIC_INDEX)
+		.unwrap_or_default();
 	let result = execute_transaction_backend(&utx, extrinsic_index);
 	ExtrinsicData::insert(extrinsic_index, utx.encode());
 	storage::unhashed::put(well_known_keys::EXTRINSIC_INDEX, &(extrinsic_index + 1));
@@ -261,6 +264,14 @@ fn execute_transaction_backend(utx: &Extrinsic, extrinsic_index: u32) -> ApplyEx
 			execute_storage_change(key, value.as_ref().map(|v| &**v)),
 		Extrinsic::ChangesTrieConfigUpdate(ref new_config) =>
 			execute_changes_trie_config_update(new_config.clone()),
+		Extrinsic::OffchainIndexSet(key, value) => {
+			sp_io::offchain_index::set(&key, &value);
+			Ok(Ok(()))
+		},
+		Extrinsic::OffchainIndexClear(key) => {
+			sp_io::offchain_index::clear(&key);
+			Ok(Ok(()))
+		}
 	}
 }
 
@@ -399,7 +410,7 @@ mod tests {
 
 	#[test]
 	fn block_import_works_native() {
-		block_import_works(|b, ext| ext.execute_with(|| execute_block(b)));
+		block_import_works(|b, ext| ext.execute_with(|| { execute_block(b); }));
 	}
 
 	#[test]
@@ -499,7 +510,7 @@ mod tests {
 
 	#[test]
 	fn block_import_with_transaction_works_native() {
-		block_import_with_transaction_works(|b, ext| ext.execute_with(|| execute_block(b)));
+		block_import_with_transaction_works(|b, ext| ext.execute_with(|| { execute_block(b); }));
 	}
 
 	#[test]

@@ -1,18 +1,20 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! State API backend for light nodes.
 
@@ -472,6 +474,15 @@ impl<Block, F, Client> StateBackend<Block, Client> for LightState<Block, F, Clie
 	) -> RpcResult<bool> {
 		Ok(self.subscriptions.cancel(id))
 	}
+
+	fn trace_block(
+		&self,
+		_block: Block::Hash,
+		_targets: Option<String>,
+		_storage_keys: Option<String>,
+	) -> FutureResult<sp_rpc::tracing::TraceBlockResponse> {
+		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
+	}
 }
 
 impl<Block, F, Client> ChildStateBackend<Block, Client> for LightState<Block, F, Client>
@@ -480,11 +491,31 @@ impl<Block, F, Client> ChildStateBackend<Block, Client> for LightState<Block, F,
 		Client: BlockchainEvents<Block> + HeaderBackend<Block> + Send + Sync + 'static,
 		F: Fetcher<Block> + 'static
 {
+	fn read_child_proof(
+		&self,
+		_block: Option<Block::Hash>,
+		_storage_key: PrefixedStorageKey,
+		_keys: Vec<StorageKey>,
+	) -> FutureResult<ReadProof<Block::Hash>> {
+		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
+	}
+
 	fn storage_keys(
 		&self,
 		_block: Option<Block::Hash>,
 		_storage_key: PrefixedStorageKey,
 		_prefix: StorageKey,
+	) -> FutureResult<Vec<StorageKey>> {
+		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
+	}
+
+	fn storage_keys_paged(
+		&self,
+		_block: Option<Block::Hash>,
+		_storage_key: PrefixedStorageKey,
+		_prefix: Option<StorageKey>,
+		_count: u32,
+		_start_key: Option<StorageKey>,
 	) -> FutureResult<Vec<StorageKey>> {
 		Box::new(result(Err(client_err(ClientError::NotAvailableOnLightClient))))
 	}
@@ -588,7 +619,7 @@ fn runtime_version<Block: BlockT, F: Fetcher<Block>>(
 	)
 	.then(|version| ready(version.and_then(|version|
 		Decode::decode(&mut &version.0[..])
-			.map_err(|e| client_err(ClientError::VersionInvalid(e.what().into())))
+			.map_err(|e| client_err(ClientError::VersionInvalid(e.to_string())))
 	)))
 }
 
@@ -720,13 +751,10 @@ fn maybe_share_remote_request<Block: BlockT, Requests, V, IssueRequest, IssueReq
 fn display_error<F, T>(future: F) -> impl std::future::Future<Output=Result<T, ()>> where
 	F: std::future::Future<Output=Result<T, Error>>
 {
-	future.then(|result| ready(match result {
-		Ok(result) => Ok(result),
-		Err(err) => {
+	future.then(|result| ready(result.or_else(|err| {
 			warn!("Remote request for subscription data has failed with: {:?}", err);
 			Err(())
-		},
-	}))
+		})))
 }
 
 /// Convert successful future result into Ok(Some(result)) and error into Ok(None),

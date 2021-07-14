@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,7 +19,6 @@
 
 use sp_std::prelude::*;
 use sp_std::{self, marker::PhantomData, convert::{TryFrom, TryInto}, fmt::Debug};
-use sp_io;
 #[cfg(feature = "std")]
 use std::fmt::Display;
 #[cfg(feature = "std")]
@@ -27,7 +26,7 @@ use std::str::FromStr;
 #[cfg(feature = "std")]
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use sp_core::{self, Hasher, TypeId, RuntimeDebug};
-use crate::codec::{Codec, Encode, Decode};
+use crate::codec::{Codec, Encode, Decode, MaxEncodedLen};
 use crate::transaction_validity::{
 	ValidTransaction, TransactionSource, TransactionValidity, TransactionValidityError,
 	UnknownTransaction,
@@ -111,7 +110,7 @@ impl Verify for sp_core::ecdsa::Signature {
 			self.as_ref(),
 			&sp_io::hashing::blake2_256(msg.get()),
 		) {
-			Ok(pubkey) => &signer.as_ref()[..] == &pubkey[..],
+			Ok(pubkey) => signer.as_ref() == &pubkey[..],
 			_ => false,
 		}
 	}
@@ -150,6 +149,25 @@ pub struct BadOrigin;
 impl From<BadOrigin> for &'static str {
 	fn from(_: BadOrigin) -> &'static str {
 		"Bad origin"
+	}
+}
+
+/// Error that can be returned by our impl of `StoredMap`.
+#[derive(Encode, Decode, RuntimeDebug)]
+pub enum StoredMapError {
+	/// Attempt to create map value when it is a consumer and there are no providers in place.
+	NoProviders,
+	/// Attempt to anull/remove value when it is the last provider and there is still at
+	/// least one consumer left.
+	ConsumerRemaining,
+}
+
+impl From<StoredMapError> for &'static str {
+	fn from(e: StoredMapError) -> &'static str {
+		match e {
+			StoredMapError::NoProviders => "No providers",
+			StoredMapError::ConsumerRemaining => "Consumer remaining",
+		}
 	}
 }
 
@@ -207,6 +225,44 @@ impl<T> Lookup for IdentityLookup<T> {
 	type Source = T;
 	type Target = T;
 	fn lookup(&self, x: T) -> Result<T, LookupError> { Ok(x) }
+}
+
+/// A lookup implementation returning the `AccountId` from a `MultiAddress`.
+pub struct AccountIdLookup<AccountId, AccountIndex>(PhantomData<(AccountId, AccountIndex)>);
+impl<AccountId, AccountIndex> StaticLookup for AccountIdLookup<AccountId, AccountIndex>
+where
+	AccountId: Codec + Clone + PartialEq + Debug,
+	AccountIndex: Codec + Clone + PartialEq + Debug,
+	crate::MultiAddress<AccountId, AccountIndex>: Codec,
+{
+	type Source = crate::MultiAddress<AccountId, AccountIndex>;
+	type Target = AccountId;
+	fn lookup(x: Self::Source) -> Result<Self::Target, LookupError> {
+		match x {
+			crate::MultiAddress::Id(i) => Ok(i),
+			_ => Err(LookupError),
+		}
+	}
+	fn unlookup(x: Self::Target) -> Self::Source {
+		crate::MultiAddress::Id(x)
+	}
+}
+
+/// Perform a StaticLookup where there are multiple lookup sources of the same type.
+impl<A, B> StaticLookup for (A, B)
+where
+	A: StaticLookup,
+	B: StaticLookup<Source = A::Source, Target = A::Target>,
+{
+	type Source = A::Source;
+	type Target = A::Target;
+
+	fn lookup(x: Self::Source) -> Result<Self::Target, LookupError> {
+		A::lookup(x.clone()).or_else(|_| B::lookup(x))
+	}
+	fn unlookup(x: Self::Target) -> Self::Source {
+		A::unlookup(x)
+	}
 }
 
 /// Extensible conversion trait. Generic over both source and destination types.
@@ -330,7 +386,7 @@ impl<T:
 pub trait Hash: 'static + MaybeSerializeDeserialize + Debug + Clone + Eq + PartialEq + Hasher<Out = <Self as Hash>::Output> {
 	/// The hash type produced.
 	type Output: Member + MaybeSerializeDeserialize + Debug + sp_std::hash::Hash
-		+ AsRef<[u8]> + AsMut<[u8]> + Copy + Default + Encode + Decode;
+		+ AsRef<[u8]> + AsMut<[u8]> + Copy + Default + Encode + Decode + MaxEncodedLen;
 
 	/// Produce the hash of some byte-slice.
 	fn hash(s: &[u8]) -> Self::Output {
@@ -655,7 +711,7 @@ pub trait Dispatchable {
 	/// identifier for the caller. The origin can be empty in the case of an inherent extrinsic.
 	type Origin;
 	/// ...
-	type Trait;
+	type Config;
 	/// An opaque set of information attached to the transaction. This could be constructed anywhere
 	/// down the line in a runtime. The current Substrate runtime uses a struct with the same name
 	/// to represent the dispatch class and weight.
@@ -674,7 +730,7 @@ pub type PostDispatchInfoOf<T> = <T as Dispatchable>::PostInfo;
 
 impl Dispatchable for () {
 	type Origin = ();
-	type Trait = ();
+	type Config = ();
 	type Info = ();
 	type PostInfo = ();
 	fn dispatch(self, _origin: Self::Origin) -> crate::DispatchResultWithInfo<Self::PostInfo> {
@@ -1127,31 +1183,9 @@ macro_rules! count {
 	};
 }
 
-/// Implement `OpaqueKeys` for a described struct.
-///
-/// Every field type must implement [`BoundToRuntimeAppPublic`](crate::BoundToRuntimeAppPublic).
-/// `KeyTypeIdProviders` is set to the types given as fields.
-///
-/// ```rust
-/// use sp_runtime::{
-/// 	impl_opaque_keys, KeyTypeId, BoundToRuntimeAppPublic, app_crypto::{sr25519, ed25519}
-/// };
-///
-/// pub struct KeyModule;
-/// impl BoundToRuntimeAppPublic for KeyModule { type Public = ed25519::AppPublic; }
-///
-/// pub struct KeyModule2;
-/// impl BoundToRuntimeAppPublic for KeyModule2 { type Public = sr25519::AppPublic; }
-///
-/// impl_opaque_keys! {
-/// 	pub struct Keys {
-/// 		pub key_module: KeyModule,
-/// 		pub key_module2: KeyModule2,
-/// 	}
-/// }
-/// ```
+#[doc(hidden)]
 #[macro_export]
-macro_rules! impl_opaque_keys {
+macro_rules! impl_opaque_keys_inner {
 	(
 		$( #[ $attr:meta ] )*
 		pub struct $name:ident {
@@ -1168,7 +1202,6 @@ macro_rules! impl_opaque_keys {
 			$crate::codec::Decode,
 			$crate::RuntimeDebug,
 		)]
-		#[cfg_attr(feature = "std", derive($crate::serde::Serialize, $crate::serde::Deserialize))]
 		pub struct $name {
 			$(
 				$( #[ $inner_attr ] )*
@@ -1259,6 +1292,83 @@ macro_rules! impl_opaque_keys {
 	};
 }
 
+/// Implement `OpaqueKeys` for a described struct.
+///
+/// Every field type must implement [`BoundToRuntimeAppPublic`](crate::BoundToRuntimeAppPublic).
+/// `KeyTypeIdProviders` is set to the types given as fields.
+///
+/// ```rust
+/// use sp_runtime::{
+/// 	impl_opaque_keys, KeyTypeId, BoundToRuntimeAppPublic, app_crypto::{sr25519, ed25519}
+/// };
+///
+/// pub struct KeyModule;
+/// impl BoundToRuntimeAppPublic for KeyModule { type Public = ed25519::AppPublic; }
+///
+/// pub struct KeyModule2;
+/// impl BoundToRuntimeAppPublic for KeyModule2 { type Public = sr25519::AppPublic; }
+///
+/// impl_opaque_keys! {
+/// 	pub struct Keys {
+/// 		pub key_module: KeyModule,
+/// 		pub key_module2: KeyModule2,
+/// 	}
+/// }
+/// ```
+#[macro_export]
+#[cfg(feature = "std")]
+macro_rules! impl_opaque_keys {
+	{
+		$( #[ $attr:meta ] )*
+		pub struct $name:ident {
+			$(
+				$( #[ $inner_attr:meta ] )*
+				pub $field:ident: $type:ty,
+			)*
+		}
+	} => {
+		$crate::paste::paste! {
+			use $crate::serde as [< __opaque_keys_serde_import__ $name >];
+
+			$crate::impl_opaque_keys_inner! {
+				$( #[ $attr ] )*
+				#[derive($crate::serde::Serialize, $crate::serde::Deserialize)]
+				#[serde(crate = "__opaque_keys_serde_import__" $name)]
+				pub struct $name {
+					$(
+						$( #[ $inner_attr ] )*
+						pub $field: $type,
+					)*
+				}
+			}
+		}
+	}
+}
+
+#[macro_export]
+#[cfg(not(feature = "std"))]
+macro_rules! impl_opaque_keys {
+	{
+		$( #[ $attr:meta ] )*
+		pub struct $name:ident {
+			$(
+				$( #[ $inner_attr:meta ] )*
+				pub $field:ident: $type:ty,
+			)*
+		}
+	} => {
+		$crate::impl_opaque_keys_inner! {
+			$( #[ $attr ] )*
+			pub struct $name {
+				$(
+					$( #[ $inner_attr ] )*
+					pub $field: $type,
+				)*
+			}
+		}
+	}
+}
+
 /// Trait for things which can be printed from the runtime.
 pub trait Printable {
 	/// Print the object.
@@ -1347,6 +1457,29 @@ pub trait BlockIdTo<Block: self::Block> {
 		&self,
 		block_id: &crate::generic::BlockId<Block>,
 	) -> Result<Option<NumberFor<Block>>, Self::Error>;
+}
+
+/// Get current block number
+pub trait BlockNumberProvider {
+	/// Type of `BlockNumber` to provide.
+	type BlockNumber: Codec + Clone + Ord + Eq + AtLeast32BitUnsigned;
+
+	/// Returns the current block number.
+	///
+	/// Provides an abstraction over an arbitrary way of providing the
+	/// current block number.
+	///
+	/// In case of using crate `sp_runtime` with the crate `frame-system`,
+	/// it is already implemented for
+	/// `frame_system::Pallet<T: Config>` as:
+	///
+	/// ```ignore
+	/// fn current_block_number() -> Self {
+	///     frame_system::Pallet<Config>::block_number()
+	/// }
+	/// ```
+	/// .
+	fn current_block_number() -> Self::BlockNumber;
 }
 
 #[cfg(test)]

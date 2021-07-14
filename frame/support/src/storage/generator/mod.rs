@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,10 +25,12 @@
 //! This is internal api and is subject to change.
 
 mod map;
+mod nmap;
 mod double_map;
 mod value;
 
 pub use map::StorageMap;
+pub use nmap::StorageNMap;
 pub use double_map::StorageDoubleMap;
 pub use value::StorageValue;
 
@@ -40,23 +42,28 @@ mod tests {
 	use crate::storage::{unhashed, generator::StorageValue, IterableStorageMap};
 	use crate::{assert_noop, assert_ok};
 
-	struct Runtime {}
-	pub trait Trait {
+	struct Runtime;
+
+	pub trait Config: 'static {
 		type Origin;
 		type BlockNumber;
+		type PalletInfo: crate::traits::PalletInfo;
+		type DbWeight: crate::traits::Get<crate::weights::RuntimeDbWeight>;
 	}
 
-	impl Trait for Runtime {
+	impl Config for Runtime {
 		type Origin = u32;
 		type BlockNumber = u32;
+		type PalletInfo = crate::tests::PanicPalletInfo;
+		type DbWeight = ();
 	}
 
 	decl_module! {
-		pub struct Module<T: Trait> for enum Call where origin: T::Origin {}
+		pub struct Module<T: Config> for enum Call where origin: T::Origin, system=self {}
 	}
 
 	crate::decl_storage! {
-		trait Store for Module<T: Trait> as Runtime {
+		trait Store for Module<T: Config> as Runtime {
 			Value get(fn value) config(): (u64, u64);
 			NumberMap: map hasher(identity) u32 => u64;
 			DoubleMap: double_map hasher(identity) u32, hasher(identity) u32 => u64;
@@ -75,7 +82,8 @@ mod tests {
 			let translate_fn = |old: Option<u32>| -> Option<(u64, u64)> {
 				old.map(|o| (o.into(), (o*2).into()))
 			};
-			let _ = Value::translate(translate_fn);
+			let res = Value::translate(translate_fn);
+			debug_assert!(res.is_ok());
 
 			// new storage should be `(1111, 1111 * 2)`
 			assert_eq!(Value::get(), (1111, 2222));

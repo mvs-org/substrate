@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,11 +21,17 @@ mod writer;
 use sc_cli::{ExecutionStrategy, WasmExecutionMethod};
 use std::fmt::Debug;
 
+// Add a more relaxed parsing for pallet names by allowing pallet directory names with `-` to be used
+// like crate names with `_`
+fn parse_pallet_name(pallet: &str) -> String {
+	pallet.replace("-", "_")
+}
+
 /// The `benchmark` command used to benchmark FRAME Pallets.
 #[derive(Debug, structopt::StructOpt)]
 pub struct BenchmarkCmd {
 	/// Select a FRAME Pallet to benchmark, or `*` for all (in which case `extrinsic` must be `*`).
-	#[structopt(short, long)]
+	#[structopt(short, long, parse(from_str = parse_pallet_name))]
 	pub pallet: String,
 
 	/// Select an extrinsic inside the pallet to benchmark, or `*` for all.
@@ -60,15 +66,27 @@ pub struct BenchmarkCmd {
 	#[structopt(long)]
 	pub no_min_squares: bool,
 
-	/// Output the benchmarks to a Rust file.
+	/// Output the benchmarks to a Rust file at the given path.
 	#[structopt(long)]
-	pub output: bool,
+	pub output: Option<std::path::PathBuf>,
 
-	/// Output the trait definition to a Rust file.
+	/// Add a header file to your outputted benchmarks
 	#[structopt(long)]
-	pub weight_trait: bool,
+	pub header: Option<std::path::PathBuf>,
 
-	/// Set the heap pages while running benchmarks.
+	/// Path to Handlebars template file used for outputting benchmark results. (Optional)
+	#[structopt(long)]
+	pub template: Option<std::path::PathBuf>,
+
+	/// Which analysis function to use when outputting benchmarks:
+	/// * min-squares (default)
+	/// * median-slopes
+	/// * max (max of min squares and median slopes for each value)
+	#[structopt(long)]
+	pub output_analysis: Option<String>,
+
+	/// Set the heap pages while running benchmarks. If not set, the default value from the client
+	/// is used.
 	#[structopt(long)]
 	pub heap_pages: Option<u64>,
 
@@ -76,9 +94,14 @@ pub struct BenchmarkCmd {
 	#[structopt(long)]
 	pub no_verify: bool,
 
-	/// Display and run extra benchmarks that would otherwise not be needed for weight construction.
+	/// Display and run extra benchmarks that would otherwise not be needed for weight
+	/// construction.
 	#[structopt(long)]
 	pub extra: bool,
+
+	/// Estimate PoV size.
+	#[structopt(long)]
+	pub record_proof: bool,
 
 	#[allow(missing_docs)]
 	#[structopt(flatten)]
@@ -97,9 +120,9 @@ pub struct BenchmarkCmd {
 	#[structopt(
 		long = "wasm-execution",
 		value_name = "METHOD",
-		possible_values = &WasmExecutionMethod::enabled_variants(),
+		possible_values = &WasmExecutionMethod::variants(),
 		case_insensitive = true,
-		default_value = "Interpreted"
+		default_value = "compiled"
 	)]
 	pub wasm_method: WasmExecutionMethod,
 

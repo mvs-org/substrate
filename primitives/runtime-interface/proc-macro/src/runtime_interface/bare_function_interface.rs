@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -239,8 +239,5 @@ fn generate_call_to_trait(
 
 /// Returns if the given `Signature` takes a `self` argument.
 fn takes_self_argument(sig: &Signature) -> bool {
-	match sig.inputs.first() {
-		Some(FnArg::Receiver(_)) => true,
-		_ => false,
-	}
+	matches!(sig.inputs.first(), Some(FnArg::Receiver(_)))
 }

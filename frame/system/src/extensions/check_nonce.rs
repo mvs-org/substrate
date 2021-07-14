@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,11 +16,8 @@
 // limitations under the License.
 
 use codec::{Encode, Decode};
-use crate::Trait;
-use frame_support::{
-	weights::DispatchInfo,
-	StorageMap,
-};
+use crate::Config;
+use frame_support::weights::DispatchInfo;
 use sp_runtime::{
 	traits::{SignedExtension, DispatchInfoOf, Dispatchable, One},
 	transaction_validity::{
@@ -35,16 +32,16 @@ use sp_std::vec;
 /// Note that this does not set any priority by default. Make sure that AT LEAST one of the signed
 /// extension sets some kind of priority upon validating transactions.
 #[derive(Encode, Decode, Clone, Eq, PartialEq)]
-pub struct CheckNonce<T: Trait>(#[codec(compact)] T::Index);
+pub struct CheckNonce<T: Config>(#[codec(compact)] T::Index);
 
-impl<T: Trait> CheckNonce<T> {
+impl<T: Config> CheckNonce<T> {
 	/// utility constructor. Used only in client/factory code.
 	pub fn from(nonce: T::Index) -> Self {
 		Self(nonce)
 	}
 }
 
-impl<T: Trait> sp_std::fmt::Debug for CheckNonce<T> {
+impl<T: Config> sp_std::fmt::Debug for CheckNonce<T> {
 	#[cfg(feature = "std")]
 	fn fmt(&self, f: &mut sp_std::fmt::Formatter) -> sp_std::fmt::Result {
 		write!(f, "CheckNonce({})", self.0)
@@ -56,7 +53,7 @@ impl<T: Trait> sp_std::fmt::Debug for CheckNonce<T> {
 	}
 }
 
-impl<T: Trait> SignedExtension for CheckNonce<T> where
+impl<T: Config> SignedExtension for CheckNonce<T> where
 	T::Call: Dispatchable<Info=DispatchInfo>
 {
 	type AccountId = T::AccountId;
@@ -123,26 +120,38 @@ impl<T: Trait> SignedExtension for CheckNonce<T> where
 mod tests {
 	use super::*;
 	use crate::mock::{Test, new_test_ext, CALL};
+	use frame_support::{assert_noop, assert_ok};
 
 	#[test]
 	fn signed_ext_check_nonce_works() {
 		new_test_ext().execute_with(|| {
 			crate::Account::<Test>::insert(1, crate::AccountInfo {
 				nonce: 1,
-				refcount: 0,
+				consumers: 0,
+				providers: 0,
+				sufficients: 0,
 				data: 0,
 			});
 			let info = DispatchInfo::default();
 			let len = 0_usize;
 			// stale
-			assert!(CheckNonce::<Test>(0).validate(&1, CALL, &info, len).is_err());
-			assert!(CheckNonce::<Test>(0).pre_dispatch(&1, CALL, &info, len).is_err());
+			assert_noop!(
+				CheckNonce::<Test>(0).validate(&1, CALL, &info, len),
+				InvalidTransaction::Stale
+			);
+			assert_noop!(
+				CheckNonce::<Test>(0).pre_dispatch(&1, CALL, &info, len),
+				InvalidTransaction::Stale
+			);
 			// correct
-			assert!(CheckNonce::<Test>(1).validate(&1, CALL, &info, len).is_ok());
-			assert!(CheckNonce::<Test>(1).pre_dispatch(&1, CALL, &info, len).is_ok());
+			assert_ok!(CheckNonce::<Test>(1).validate(&1, CALL, &info, len));
+			assert_ok!(CheckNonce::<Test>(1).pre_dispatch(&1, CALL, &info, len));
 			// future
-			assert!(CheckNonce::<Test>(5).validate(&1, CALL, &info, len).is_ok());
-			assert!(CheckNonce::<Test>(5).pre_dispatch(&1, CALL, &info, len).is_err());
+			assert_ok!(CheckNonce::<Test>(5).validate(&1, CALL, &info, len));
+			assert_noop!(
+				CheckNonce::<Test>(5).pre_dispatch(&1, CALL, &info, len),
+				InvalidTransaction::Future
+			);
 		})
 	}
 }

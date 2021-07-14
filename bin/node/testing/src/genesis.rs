@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -22,8 +22,8 @@ use crate::keyring::*;
 use sp_keyring::{Ed25519Keyring, Sr25519Keyring};
 use node_runtime::{
 	GenesisConfig, BalancesConfig, SessionConfig, StakingConfig, SystemConfig,
-	GrandpaConfig, IndicesConfig, ContractsConfig, SocietyConfig, wasm_binary_unwrap,
-	AccountId, StakerStatus,
+	GrandpaConfig, IndicesConfig, SocietyConfig, wasm_binary_unwrap,
+	AccountId, StakerStatus, BabeConfig, BABE_GENESIS_EPOCH_CONFIG,
 };
 use node_runtime::constants::currency::*;
 use sp_core::ChangesTrieConfiguration;
@@ -56,20 +56,20 @@ pub fn config_endowed(
 	);
 
 	GenesisConfig {
-		frame_system: Some(SystemConfig {
+		system: SystemConfig {
 			changes_trie_config: if support_changes_trie { Some(ChangesTrieConfiguration {
 				digest_interval: 2,
 				digest_levels: 2,
 			}) } else { None },
 			code: code.map(|x| x.to_vec()).unwrap_or_else(|| wasm_binary_unwrap().to_vec()),
-		}),
-		pallet_indices: Some(IndicesConfig {
+		},
+		indices: IndicesConfig {
 			indices: vec![],
-		}),
-		pallet_balances: Some(BalancesConfig {
+		},
+		balances: BalancesConfig {
 			balances: endowed,
-		}),
-		pallet_session: Some(SessionConfig {
+		},
+		session: SessionConfig {
 			keys: vec![
 				(dave(), alice(), to_session_keys(
 					&Ed25519Keyring::Alice,
@@ -84,8 +84,8 @@ pub fn config_endowed(
 					&Sr25519Keyring::Charlie,
 				)),
 			]
-		}),
-		pallet_staking: Some(StakingConfig {
+		},
+		staking: StakingConfig {
 			stakers: vec![
 				(dave(), alice(), 111 * DOLLARS, StakerStatus::Validator),
 				(eve(), bob(), 100 * DOLLARS, StakerStatus::Validator),
@@ -96,28 +96,30 @@ pub fn config_endowed(
 			slash_reward_fraction: Perbill::from_percent(10),
 			invulnerables: vec![alice(), bob(), charlie()],
 			.. Default::default()
-		}),
-		pallet_contracts: Some(ContractsConfig {
-			current_schedule: Default::default(),
-		}),
-		pallet_babe: Some(Default::default()),
-		pallet_grandpa: Some(GrandpaConfig {
+		},
+		babe: BabeConfig {
 			authorities: vec![],
-		}),
-		pallet_im_online: Some(Default::default()),
-		pallet_authority_discovery: Some(Default::default()),
-		pallet_democracy: Some(Default::default()),
-		pallet_collective_Instance1: Some(Default::default()),
-		pallet_collective_Instance2: Some(Default::default()),
-		pallet_membership_Instance1: Some(Default::default()),
-		pallet_elections_phragmen: Some(Default::default()),
-		pallet_sudo: Some(Default::default()),
-		pallet_treasury: Some(Default::default()),
-		pallet_society: Some(SocietyConfig {
+			epoch_config: Some(BABE_GENESIS_EPOCH_CONFIG),
+		},
+		grandpa: GrandpaConfig {
+			authorities: vec![],
+		},
+		im_online: Default::default(),
+		authority_discovery: Default::default(),
+		democracy: Default::default(),
+		council: Default::default(),
+		technical_committee: Default::default(),
+		technical_membership: Default::default(),
+		elections: Default::default(),
+		sudo: Default::default(),
+		treasury: Default::default(),
+		society: SocietyConfig {
 			members: vec![alice(), bob()],
 			pot: 0,
 			max_members: 999,
-		}),
-		pallet_vesting: Some(Default::default()),
+		},
+		vesting: Default::default(),
+		gilt: Default::default(),
+		transaction_storage: Default::default(),
 	}
 }

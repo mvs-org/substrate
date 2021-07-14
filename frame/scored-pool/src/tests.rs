@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tests for the module.
+//! Tests for the pallet.
 
 use super::*;
 use mock::*;
@@ -23,9 +23,9 @@ use mock::*;
 use frame_support::{assert_ok, assert_noop, traits::OnInitialize};
 use sp_runtime::traits::BadOrigin;
 
-type ScoredPool = Module<Test>;
-type System = frame_system::Module<Test>;
-type Balances = pallet_balances::Module<Test>;
+type ScoredPool = Pallet<Test>;
+type System = frame_system::Pallet<Test>;
+type Balances = pallet_balances::Pallet<Test>;
 
 #[test]
 fn query_membership_works() {

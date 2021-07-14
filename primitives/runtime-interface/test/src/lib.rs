@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,7 +24,7 @@ use sp_runtime_interface_test_wasm::{wasm_binary_unwrap, test_api::HostFunctions
 use sp_runtime_interface_test_wasm_deprecated::wasm_binary_unwrap as wasm_binary_deprecated_unwrap;
 
 use sp_wasm_interface::HostFunctions as HostFunctionsT;
-use sc_executor::CallInWasm;
+use sc_executor_common::runtime_blob::RuntimeBlob;
 
 use std::{collections::HashSet, sync::{Arc, Mutex}};
 
@@ -44,15 +44,17 @@ fn call_wasm_method_with_result<HF: HostFunctionsT>(
 		Some(8),
 		host_functions,
 		8,
-	);
-	executor.call_in_wasm(
-		binary,
 		None,
-		method,
-		&[],
-		&mut ext_ext,
-		sp_core::traits::MissingHostFunctions::Disallow,
-	).map_err(|e| format!("Failed to execute `{}`: {}", method, e))?;
+	);
+	executor
+		.uncached_call(
+			RuntimeBlob::uncompress_if_needed(binary).expect("Failed to parse binary"),
+			&mut ext_ext,
+			false,
+			method,
+			&[],
+		)
+		.map_err(|e| format!("Failed to execute `{}`: {}", method, e))?;
 	Ok(ext)
 }
 
@@ -208,4 +210,9 @@ fn test_tracing() {
 
 	let inner = subscriber.0.lock().unwrap();
 	assert!(inner.spans.contains("return_input_version_1"));
+}
+
+#[test]
+fn test_return_input_as_tuple() {
+	call_wasm_method::<HostFunctions>(&wasm_binary_unwrap()[..], "test_return_input_as_tuple");
 }

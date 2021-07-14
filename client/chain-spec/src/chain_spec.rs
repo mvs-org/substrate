@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -21,13 +21,13 @@
 
 use std::{borrow::Cow, fs::File, path::PathBuf, sync::Arc, collections::HashMap};
 use serde::{Serialize, Deserialize};
-use sp_core::storage::{StorageKey, StorageData, ChildInfo, Storage, StorageChild};
+use sp_core::{storage::{StorageKey, StorageData, ChildInfo, Storage, StorageChild}, Bytes};
 use sp_runtime::BuildStorage;
 use serde_json as json;
 use crate::{RuntimeGenesis, ChainType, extension::GetExtension, Properties};
 use sc_network::config::MultiaddrWithPeerId;
 use sc_telemetry::TelemetryEndpoints;
-use sp_runtime::traits::Block as BlockT;
+use sp_runtime::traits::{Block as BlockT, NumberFor};
 
 enum GenesisSource<G> {
 	File(PathBuf),
@@ -160,6 +160,12 @@ struct ClientSpec<E> {
 	#[serde(skip_serializing)]
 	genesis: serde::de::IgnoredAny,
 	light_sync_state: Option<SerializableLightSyncState>,
+	/// Mapping from `block_hash` to `wasm_code`.
+	///
+	/// The given `wasm_code` will be used to substitute the on-chain wasm code from the given
+	/// block hash onwards.
+	#[serde(default)]
+	code_substitutes: HashMap<String, Bytes>,
 }
 
 /// A type denoting empty extensions.
@@ -249,6 +255,7 @@ impl<G, E> ChainSpec<G, E> {
 			consensus_engine: (),
 			genesis: Default::default(),
 			light_sync_state: None,
+			code_substitutes: HashMap::new(),
 		};
 
 		ChainSpec {
@@ -264,7 +271,7 @@ impl<G, E> ChainSpec<G, E> {
 
 	/// Hardcode infomation to allow light clients to sync quickly into the chain spec.
 	fn set_light_sync_state(&mut self, light_sync_state: SerializableLightSyncState) {
-		self.client_spec.light_sync_state = Some(light_sync_state);	
+		self.client_spec.light_sync_state = Some(light_sync_state);
 	}
 }
 
@@ -338,7 +345,7 @@ impl<G: RuntimeGenesis, E: serde::Serialize + Clone + 'static> ChainSpec<G, E> {
 impl<G, E> crate::ChainSpec for ChainSpec<G, E>
 where
 	G: RuntimeGenesis + 'static,
-	E: GetExtension + serde::Serialize + Clone + Send + 'static,
+	E: GetExtension + serde::Serialize + Clone + Send + Sync + 'static,
 {
 	fn boot_nodes(&self) -> &[MultiaddrWithPeerId] {
 		ChainSpec::boot_nodes(self)
@@ -395,12 +402,22 @@ where
 	fn set_light_sync_state(&mut self, light_sync_state: SerializableLightSyncState) {
 		ChainSpec::set_light_sync_state(self, light_sync_state)
 	}
+
+	fn code_substitutes(&self) -> std::collections::HashMap<String, Vec<u8>> {
+		self.client_spec.code_substitutes.iter().map(|(h, c)| (h.clone(), c.0.clone())).collect()
+	}
 }
 
 /// Hardcoded infomation that allows light clients to sync quickly.
 pub struct LightSyncState<Block: BlockT> {
 	/// The header of the best finalized block.
-	pub header: <Block as BlockT>::Header,
+	pub finalized_block_header: <Block as BlockT>::Header,
+	/// The epoch changes tree for babe.
+	pub babe_epoch_changes: sc_consensus_epochs::EpochChangesFor<Block, sc_consensus_babe::Epoch>,
+	/// The babe weight of the finalized block.
+	pub babe_finalized_block_weight: sp_consensus_babe::BabeBlockWeight,
+	/// The authority set for grandpa.
+	pub grandpa_authority_set: sc_finality_grandpa::AuthoritySet<<Block as BlockT>::Hash, NumberFor<Block>>,
 }
 
 impl<Block: BlockT> LightSyncState<Block> {
@@ -409,14 +426,26 @@ impl<Block: BlockT> LightSyncState<Block> {
 		use codec::Encode;
 
 		SerializableLightSyncState {
-			header: StorageData(self.header.encode()),
+			finalized_block_header: StorageData(self.finalized_block_header.encode()),
+			babe_epoch_changes:
+				StorageData(self.babe_epoch_changes.encode()),
+			babe_finalized_block_weight:
+				self.babe_finalized_block_weight,
+			grandpa_authority_set:
+				StorageData(self.grandpa_authority_set.encode()),
 		}
 	}
 
 	/// Convert from a `SerializableLightSyncState`.
 	pub fn from_serializable(serialized: &SerializableLightSyncState) -> Result<Self, codec::Error> {
 		Ok(Self {
-			header: codec::Decode::decode(&mut &serialized.header.0[..])?,
+			finalized_block_header: codec::Decode::decode(&mut &serialized.finalized_block_header.0[..])?,
+			babe_epoch_changes:
+				codec::Decode::decode(&mut &serialized.babe_epoch_changes.0[..])?,
+			babe_finalized_block_weight:
+				serialized.babe_finalized_block_weight,
+			grandpa_authority_set:
+				codec::Decode::decode(&mut &serialized.grandpa_authority_set.0[..])?,
 		})
 	}
 }
@@ -426,7 +455,10 @@ impl<Block: BlockT> LightSyncState<Block> {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct SerializableLightSyncState {
-	header: StorageData,
+	finalized_block_header: StorageData,
+	babe_epoch_changes: StorageData,
+	babe_finalized_block_weight: sp_consensus_babe::BabeBlockWeight,
+	grandpa_authority_set: StorageData,
 }
 
 #[cfg(test)]

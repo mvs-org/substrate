@@ -1,25 +1,27 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! This crate provides an implementation of `WasmModule` that is baked by wasmi.
 
 use std::{str, cell::RefCell, sync::Arc};
 use wasmi::{
 	Module, ModuleInstance, MemoryInstance, MemoryRef, TableRef, ImportsBuilder, ModuleRef,
-	memory_units::Pages,
+	FuncInstance, memory_units::Pages,
 	RuntimeValue::{I32, I64, self},
 };
 use codec::{Encode, Decode};
@@ -29,16 +31,16 @@ use sp_wasm_interface::{
 	FunctionContext, Pointer, WordSize, Sandbox, MemoryId, Result as WResult, Function,
 };
 use sp_runtime_interface::unpack_ptr_and_len;
-use sc_executor_common::wasm_runtime::{WasmModule, WasmInstance};
+use sc_executor_common::wasm_runtime::{WasmModule, WasmInstance, InvokeMethod};
 use sc_executor_common::{
 	error::{Error, WasmError},
 	sandbox,
 };
-use sc_executor_common::util::{DataSegmentsSnapshot, WasmModuleInfo};
+use sc_executor_common::runtime_blob::{RuntimeBlob, DataSegmentsSnapshot};
 
 struct FunctionExecutor<'a> {
 	sandbox_store: sandbox::Store<wasmi::FuncRef>,
-	heap: sp_allocator::FreeingBumpHeapAllocator,
+	heap: sc_allocator::FreeingBumpHeapAllocator,
 	memory: MemoryRef,
 	table: Option<TableRef>,
 	host_functions: &'a [&'static dyn Function],
@@ -57,7 +59,7 @@ impl<'a> FunctionExecutor<'a> {
 	) -> Result<Self, Error> {
 		Ok(FunctionExecutor {
 			sandbox_store: sandbox::Store::new(),
-			heap: sp_allocator::FreeingBumpHeapAllocator::new(heap_base),
+			heap: sc_allocator::FreeingBumpHeapAllocator::new(heap_base),
 			memory: m,
 			table: t,
 			host_functions,
@@ -183,7 +185,7 @@ impl<'a> Sandbox for FunctionExecutor<'a> {
 		&mut self,
 		instance_id: u32,
 		export_name: &str,
-		args: &[u8],
+		mut args: &[u8],
 		return_val: Pointer<u8>,
 		return_val_len: WordSize,
 		state: u32,
@@ -191,7 +193,7 @@ impl<'a> Sandbox for FunctionExecutor<'a> {
 		trace!(target: "sp-sandbox", "invoke, instance_idx={}", instance_id);
 
 		// Deserialize arguments and convert them into wasmi types.
-		let args = Vec::<sp_wasm_interface::Value>::decode(&mut &args[..])
+		let args = Vec::<sp_wasm_interface::Value>::decode(&mut args)
 			.map_err(|_| "Can't decode serialized arguments for the invocation")?
 			.into_iter()
 			.map(Into::into)
@@ -434,7 +436,7 @@ fn get_heap_base(module: &ModuleRef) -> Result<u32, Error> {
 fn call_in_wasm_module(
 	module_instance: &ModuleRef,
 	memory: &MemoryRef,
-	method: &str,
+	method: InvokeMethod,
 	data: &[u8],
 	host_functions: &[&'static dyn Function],
 	allow_missing_func_imports: bool,
@@ -446,24 +448,49 @@ fn call_in_wasm_module(
 		.and_then(|e| e.as_table().cloned());
 	let heap_base = get_heap_base(module_instance)?;
 
-	let mut fec = FunctionExecutor::new(
+	let mut function_executor = FunctionExecutor::new(
 		memory.clone(),
 		heap_base,
-		table,
+		table.clone(),
 		host_functions,
 		allow_missing_func_imports,
 		missing_functions,
 	)?;
 
 	// Write the call data
-	let offset = fec.allocate_memory(data.len() as u32)?;
-	fec.write_memory(offset, data)?;
+	let offset = function_executor.allocate_memory(data.len() as u32)?;
+	function_executor.write_memory(offset, data)?;
 
-	let result = module_instance.invoke_export(
-		method,
-		&[I32(u32::from(offset) as i32), I32(data.len() as i32)],
-		&mut fec,
-	);
+	let result = match method {
+		InvokeMethod::Export(method) => {
+			module_instance.invoke_export(
+				method,
+				&[I32(u32::from(offset) as i32), I32(data.len() as i32)],
+				&mut function_executor,
+			)
+		},
+		InvokeMethod::Table(func_ref) => {
+			let func = table.ok_or(Error::NoTable)?
+				.get(func_ref)?
+				.ok_or(Error::NoTableEntryWithIndex(func_ref))?;
+			FuncInstance::invoke(
+				&func,
+				&[I32(u32::from(offset) as i32), I32(data.len() as i32)],
+				&mut function_executor,
+			).map_err(Into::into)
+		},
+		InvokeMethod::TableWithWrapper { dispatcher_ref, func } => {
+			let dispatcher = table.ok_or(Error::NoTable)?
+				.get(dispatcher_ref)?
+				.ok_or(Error::NoTableEntryWithIndex(dispatcher_ref))?;
+
+			FuncInstance::invoke(
+				&dispatcher,
+				&[I32(func as _), I32(u32::from(offset) as i32), I32(data.len() as i32)],
+				&mut function_executor,
+			).map_err(Into::into)
+		},
+	};
 
 	match result {
 		Ok(Some(I64(r))) => {
@@ -474,7 +501,7 @@ fn call_in_wasm_module(
 			trace!(
 				target: "wasm-executor",
 				"Failed to execute code with {} pages",
-				memory.current_size().0
+				memory.current_size().0,
 			);
 			Err(e.into())
 		},
@@ -614,18 +641,18 @@ impl WasmModule for WasmiRuntime {
 /// Create a new `WasmiRuntime` given the code. This function loads the module and
 /// stores it in the instance.
 pub fn create_runtime(
-	code: &[u8],
+	blob: RuntimeBlob,
 	heap_pages: u64,
 	host_functions: Vec<&'static dyn Function>,
 	allow_missing_func_imports: bool,
 ) -> Result<WasmiRuntime, WasmError> {
-	let module = Module::from_buffer(&code).map_err(|_| WasmError::InvalidModule)?;
+	let data_segments_snapshot = DataSegmentsSnapshot::take(&blob)
+		.map_err(|e| WasmError::Other(e.to_string()))?;
 
-	// Extract the data segments from the wasm code.
-	//
-	// A return of this error actually indicates that there is a problem in logic, since
-	// we just loaded and validated the `module` above.
-	let (data_segments_snapshot, global_vals_snapshot) = {
+	let module = Module::from_parity_wasm_module(blob.into_inner())
+		.map_err(|_| WasmError::InvalidModule)?;
+
+	let global_vals_snapshot = {
 		let (instance, _, _) = instantiate_module(
 			heap_pages as usize,
 			&module,
@@ -633,15 +660,7 @@ pub fn create_runtime(
 			allow_missing_func_imports,
 		)
 		.map_err(|e| WasmError::Instantiation(e.to_string()))?;
-
-		let data_segments_snapshot = DataSegmentsSnapshot::take(
-			&WasmModuleInfo::new(code)
-				.ok_or_else(|| WasmError::Other("cannot deserialize module".to_string()))?,
-		)
-		.map_err(|e| WasmError::Other(e.to_string()))?;
-		let global_vals_snapshot = GlobalValsSnapshot::take(&instance);
-
-		(data_segments_snapshot, global_vals_snapshot)
+		GlobalValsSnapshot::take(&instance)
 	};
 
 	Ok(WasmiRuntime {
@@ -677,7 +696,7 @@ pub struct WasmiInstance {
 unsafe impl Send for WasmiInstance {}
 
 impl WasmInstance for WasmiInstance {
-	fn call(&self, method: &str, data: &[u8]) -> Result<Vec<u8>, Error> {
+	fn call(&self, method: InvokeMethod, data: &[u8]) -> Result<Vec<u8>, Error> {
 		// We reuse a single wasm instance for multiple calls and a previous call (if any)
 		// altered the state. Therefore, we need to restore the instance to original state.
 

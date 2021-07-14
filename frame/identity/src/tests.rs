@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,67 +18,74 @@
 // Tests for Identity Pallet
 
 use super::*;
+use crate as pallet_identity;
 
+use codec::{Encode, Decode};
 use sp_runtime::traits::BadOrigin;
-use frame_support::{
-	assert_ok, assert_noop, impl_outer_origin, parameter_types, weights::Weight,
-	ord_parameter_types,
-};
+use frame_support::{assert_ok, assert_noop, parameter_types, ord_parameter_types, BoundedVec};
 use sp_core::H256;
 use frame_system::{EnsureSignedBy, EnsureOneOf, EnsureRoot};
 use sp_runtime::{
-	Perbill, testing::Header, traits::{BlakeTwo256, IdentityLookup},
+	testing::Header, traits::{BlakeTwo256, IdentityLookup},
 };
 
-impl_outer_origin! {
-	pub enum Origin for Test where system = frame_system {}
-}
+type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
+type Block = frame_system::mocking::MockBlock<Test>;
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct Test;
+frame_support::construct_runtime!(
+	pub enum Test where
+		Block = Block,
+		NodeBlock = Block,
+		UncheckedExtrinsic = UncheckedExtrinsic,
+	{
+		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
+		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
+		Identity: pallet_identity::{Pallet, Call, Storage, Event<T>},
+	}
+);
+
 parameter_types! {
 	pub const BlockHashCount: u64 = 250;
-	pub const MaximumBlockWeight: Weight = 1024;
-	pub const MaximumBlockLength: u32 = 2 * 1024;
-	pub const AvailableBlockRatio: Perbill = Perbill::one();
+	pub BlockWeights: frame_system::limits::BlockWeights =
+		frame_system::limits::BlockWeights::simple_max(1024);
 }
-impl frame_system::Trait for Test {
-	type BaseCallFilter = ();
+impl frame_system::Config for Test {
+	type BaseCallFilter = frame_support::traits::AllowAll;
+	type BlockWeights = ();
+	type BlockLength = ();
 	type Origin = Origin;
 	type Index = u64;
 	type BlockNumber = u64;
 	type Hash = H256;
-	type Call = ();
+	type Call = Call;
 	type Hashing = BlakeTwo256;
 	type AccountId = u64;
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
-	type Event = ();
+	type Event = Event;
 	type BlockHashCount = BlockHashCount;
-	type MaximumBlockWeight = MaximumBlockWeight;
 	type DbWeight = ();
-	type BlockExecutionWeight = ();
-	type ExtrinsicBaseWeight = ();
-	type MaximumExtrinsicWeight = MaximumBlockWeight;
-	type MaximumBlockLength = MaximumBlockLength;
-	type AvailableBlockRatio = AvailableBlockRatio;
 	type Version = ();
-	type PalletInfo = ();
+	type PalletInfo = PalletInfo;
 	type AccountData = pallet_balances::AccountData<u64>;
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
+	type SS58Prefix = ();
+	type OnSetCode = ();
 }
 parameter_types! {
 	pub const ExistentialDeposit: u64 = 1;
 }
-impl pallet_balances::Trait for Test {
+impl pallet_balances::Config for Test {
 	type Balance = u64;
-	type Event = ();
+	type Event = Event;
 	type DustRemoval = ();
 	type ExistentialDeposit = ExistentialDeposit;
 	type AccountStore = System;
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type WeightInfo = ();
 }
 parameter_types! {
@@ -103,8 +110,8 @@ type EnsureTwoOrRoot = EnsureOneOf<
 	EnsureRoot<u64>,
 	EnsureSignedBy<Two, u64>
 >;
-impl Trait for Test {
-	type Event = ();
+impl pallet_identity::Config for Test {
+	type Event = Event;
 	type Currency = Balances;
 	type Slashed = ();
 	type BasicDeposit = BasicDeposit;
@@ -117,9 +124,6 @@ impl Trait for Test {
 	type ForceOrigin = EnsureTwoOrRoot;
 	type WeightInfo = ();
 }
-type System = frame_system::Module<Test>;
-type Balances = pallet_balances::Module<Test>;
-type Identity = Module<Test>;
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
 	let mut t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
@@ -136,18 +140,18 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	t.into()
 }
 
-fn ten() -> IdentityInfo {
+fn ten() -> IdentityInfo<MaxAdditionalFields> {
 	IdentityInfo {
-		display: Data::Raw(b"ten".to_vec()),
-		legal: Data::Raw(b"The Right Ordinal Ten, Esq.".to_vec()),
+		display: Data::Raw(b"ten".to_vec().try_into().unwrap()),
+		legal: Data::Raw(b"The Right Ordinal Ten, Esq.".to_vec().try_into().unwrap()),
 		.. Default::default()
 	}
 }
 
-fn twenty() -> IdentityInfo {
+fn twenty() -> IdentityInfo<MaxAdditionalFields> {
 	IdentityInfo {
-		display: Data::Raw(b"twenty".to_vec()),
-		legal: Data::Raw(b"The Right Ordinal Twenty, Esq.".to_vec()),
+		display: Data::Raw(b"twenty".to_vec().try_into().unwrap()),
+		legal: Data::Raw(b"The Right Ordinal Twenty, Esq.".to_vec().try_into().unwrap()),
 		.. Default::default()
 	}
 }
@@ -155,7 +159,7 @@ fn twenty() -> IdentityInfo {
 #[test]
 fn editing_subaccounts_should_work() {
 	new_test_ext().execute_with(|| {
-		let data = |x| Data::Raw(vec![x; 1]);
+		let data = |x| Data::Raw(vec![x; 1].try_into().unwrap());
 
 		assert_noop!(Identity::add_sub(Origin::signed(10), 20, data(1)), Error::<Test>::NoIdentity);
 
@@ -199,7 +203,7 @@ fn editing_subaccounts_should_work() {
 #[test]
 fn resolving_subaccount_ownership_works() {
 	new_test_ext().execute_with(|| {
-		let data = |x| Data::Raw(vec![x; 1]);
+		let data = |x| Data::Raw(vec![x; 1].try_into().unwrap());
 
 		assert_ok!(Identity::set_identity(Origin::signed(10), ten()));
 		assert_ok!(Identity::set_identity(Origin::signed(20), twenty()));
@@ -224,11 +228,11 @@ fn resolving_subaccount_ownership_works() {
 
 #[test]
 fn trailing_zeros_decodes_into_default_data() {
-	let encoded = Data::Raw(b"Hello".to_vec()).encode();
+	let encoded = Data::Raw(b"Hello".to_vec().try_into().unwrap()).encode();
 	assert!(<(Data, Data)>::decode(&mut &encoded[..]).is_err());
 	let input = &mut &encoded[..];
 	let (a, b) = <(Data, Data)>::decode(&mut AppendZerosInput::new(input)).unwrap();
-	assert_eq!(a, Data::Raw(b"Hello".to_vec()));
+	assert_eq!(a, Data::Raw(b"Hello".to_vec().try_into().unwrap()));
 	assert_eq!(b, Data::None);
 }
 
@@ -265,13 +269,9 @@ fn registration_should_work() {
 		assert_ok!(Identity::add_registrar(Origin::signed(1), 3));
 		assert_ok!(Identity::set_fee(Origin::signed(3), 0, 10));
 		let mut three_fields = ten();
-		three_fields.additional.push(Default::default());
-		three_fields.additional.push(Default::default());
-		three_fields.additional.push(Default::default());
-		assert_noop!(
-			Identity::set_identity(Origin::signed(10), three_fields),
-			Error::<Test>::TooManyFields
-		);
+		three_fields.additional.try_push(Default::default()).unwrap();
+		three_fields.additional.try_push(Default::default()).unwrap();
+		assert_eq!(three_fields.additional.try_push(Default::default()), Err(()));
 		assert_ok!(Identity::set_identity(Origin::signed(10), ten()));
 		assert_eq!(Identity::identity(10).unwrap().info, ten());
 		assert_eq!(Balances::free_balance(10), 90);
@@ -336,40 +336,40 @@ fn killing_slashing_should_work() {
 #[test]
 fn setting_subaccounts_should_work() {
 	new_test_ext().execute_with(|| {
-		let mut subs = vec![(20, Data::Raw(vec![40; 1]))];
+		let mut subs = vec![(20, Data::Raw(vec![40; 1].try_into().unwrap()))];
 		assert_noop!(Identity::set_subs(Origin::signed(10), subs.clone()), Error::<Test>::NotFound);
 
 		assert_ok!(Identity::set_identity(Origin::signed(10), ten()));
 		assert_ok!(Identity::set_subs(Origin::signed(10), subs.clone()));
 		assert_eq!(Balances::free_balance(10), 80);
-		assert_eq!(Identity::subs_of(10), (10, vec![20]));
-		assert_eq!(Identity::super_of(20), Some((10, Data::Raw(vec![40; 1]))));
+		assert_eq!(Identity::subs_of(10), (10, vec![20].try_into().unwrap()));
+		assert_eq!(Identity::super_of(20), Some((10, Data::Raw(vec![40; 1].try_into().unwrap()))));
 
 		// push another item and re-set it.
-		subs.push((30, Data::Raw(vec![50; 1])));
+		subs.push((30, Data::Raw(vec![50; 1].try_into().unwrap())));
 		assert_ok!(Identity::set_subs(Origin::signed(10), subs.clone()));
 		assert_eq!(Balances::free_balance(10), 70);
-		assert_eq!(Identity::subs_of(10), (20, vec![20, 30]));
-		assert_eq!(Identity::super_of(20), Some((10, Data::Raw(vec![40; 1]))));
-		assert_eq!(Identity::super_of(30), Some((10, Data::Raw(vec![50; 1]))));
+		assert_eq!(Identity::subs_of(10), (20, vec![20, 30].try_into().unwrap()));
+		assert_eq!(Identity::super_of(20), Some((10, Data::Raw(vec![40; 1].try_into().unwrap()))));
+		assert_eq!(Identity::super_of(30), Some((10, Data::Raw(vec![50; 1].try_into().unwrap()))));
 
 		// switch out one of the items and re-set.
-		subs[0] = (40, Data::Raw(vec![60; 1]));
+		subs[0] = (40, Data::Raw(vec![60; 1].try_into().unwrap()));
 		assert_ok!(Identity::set_subs(Origin::signed(10), subs.clone()));
 		assert_eq!(Balances::free_balance(10), 70); // no change in the balance
-		assert_eq!(Identity::subs_of(10), (20, vec![40, 30]));
+		assert_eq!(Identity::subs_of(10), (20, vec![40, 30].try_into().unwrap()));
 		assert_eq!(Identity::super_of(20), None);
-		assert_eq!(Identity::super_of(30), Some((10, Data::Raw(vec![50; 1]))));
-		assert_eq!(Identity::super_of(40), Some((10, Data::Raw(vec![60; 1]))));
+		assert_eq!(Identity::super_of(30), Some((10, Data::Raw(vec![50; 1].try_into().unwrap()))));
+		assert_eq!(Identity::super_of(40), Some((10, Data::Raw(vec![60; 1].try_into().unwrap()))));
 
 		// clear
 		assert_ok!(Identity::set_subs(Origin::signed(10), vec![]));
 		assert_eq!(Balances::free_balance(10), 90);
-		assert_eq!(Identity::subs_of(10), (0, vec![]));
+		assert_eq!(Identity::subs_of(10), (0, BoundedVec::default()));
 		assert_eq!(Identity::super_of(30), None);
 		assert_eq!(Identity::super_of(40), None);
 
-		subs.push((20, Data::Raw(vec![40; 1])));
+		subs.push((20, Data::Raw(vec![40; 1].try_into().unwrap())));
 		assert_noop!(Identity::set_subs(Origin::signed(10), subs.clone()), Error::<Test>::TooManySubAccounts);
 	});
 }
@@ -378,7 +378,7 @@ fn setting_subaccounts_should_work() {
 fn clearing_account_should_remove_subaccounts_and_refund() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(Identity::set_identity(Origin::signed(10), ten()));
-		assert_ok!(Identity::set_subs(Origin::signed(10), vec![(20, Data::Raw(vec![40; 1]))]));
+		assert_ok!(Identity::set_subs(Origin::signed(10), vec![(20, Data::Raw(vec![40; 1].try_into().unwrap()))]));
 		assert_ok!(Identity::clear_identity(Origin::signed(10)));
 		assert_eq!(Balances::free_balance(10), 100);
 		assert!(Identity::super_of(20).is_none());
@@ -389,7 +389,7 @@ fn clearing_account_should_remove_subaccounts_and_refund() {
 fn killing_account_should_remove_subaccounts_and_not_refund() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(Identity::set_identity(Origin::signed(10), ten()));
-		assert_ok!(Identity::set_subs(Origin::signed(10), vec![(20, Data::Raw(vec![40; 1]))]));
+		assert_ok!(Identity::set_subs(Origin::signed(10), vec![(20, Data::Raw(vec![40; 1].try_into().unwrap()))]));
 		assert_ok!(Identity::kill_identity(Origin::signed(2), 10));
 		assert_eq!(Balances::free_balance(10), 80);
 		assert!(Identity::super_of(20).is_none());
@@ -450,9 +450,11 @@ fn field_deposit_should_work() {
 		assert_ok!(Identity::set_fee(Origin::signed(3), 0, 10));
 		assert_ok!(Identity::set_identity(Origin::signed(10), IdentityInfo {
 			additional: vec![
-				(Data::Raw(b"number".to_vec()), Data::Raw(10u32.encode())),
-				(Data::Raw(b"text".to_vec()), Data::Raw(b"10".to_vec())),
-			], .. Default::default()
+				(Data::Raw(b"number".to_vec().try_into().unwrap()), Data::Raw(10u32.encode().try_into().unwrap())),
+				(Data::Raw(b"text".to_vec().try_into().unwrap()), Data::Raw(b"10".to_vec().try_into().unwrap())),
+			]
+			.try_into()
+			.unwrap(), .. Default::default()
 		}));
 		assert_eq!(Balances::free_balance(10), 70);
 	});

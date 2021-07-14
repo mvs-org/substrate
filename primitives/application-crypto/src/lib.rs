@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -194,12 +194,13 @@ macro_rules! app_crypto_public_full_crypto {
 		$crate::wrap!{
 			/// A generic `AppPublic` wrapper type over $public crypto; this has no specific App.
 			#[derive(
-				Clone, Default, Eq, PartialEq, Ord, PartialOrd,
+				Clone, Default, Eq, Hash, PartialEq, PartialOrd, Ord,
 				$crate::codec::Encode,
 				$crate::codec::Decode,
 				$crate::RuntimeDebug,
+				$crate::codec::MaxEncodedLen,
 			)]
-			#[derive(Hash)]
+			#[codec(crate = $crate::codec)]
 			pub struct Public($public);
 		}
 
@@ -321,6 +322,14 @@ macro_rules! app_crypto_public_common {
 					$crypto_type,
 					$crate::Public::to_raw_vec(key),
 				)
+			}
+		}
+
+		impl<'a> $crate::TryFrom<&'a [u8]> for Public {
+			type Error = ();
+
+			fn try_from(data: &'a [u8]) -> Result<Self, Self::Error> {
+				<$public>::try_from(data).map(Into::into)
 			}
 		}
 	}

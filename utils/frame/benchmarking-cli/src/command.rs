@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,19 +18,20 @@
 use crate::BenchmarkCmd;
 use codec::{Decode, Encode};
 use frame_benchmarking::{Analysis, BenchmarkBatch, BenchmarkSelector};
+use frame_support::traits::StorageInfo;
 use sc_cli::{SharedParams, CliConfiguration, ExecutionStrategy, Result};
 use sc_client_db::BenchmarkingState;
 use sc_executor::NativeExecutor;
-use sp_state_machine::StateMachine;
-use sp_externalities::Extensions;
 use sc_service::{Configuration, NativeExecutionDispatch};
-use sp_runtime::traits::{Block as BlockT, Header as HeaderT, NumberFor};
-use sp_core::{
-	testing::KeyStore,
-	traits::KeystoreExt,
-	offchain::{OffchainExt, testing::TestOffchainExt},
+use sp_core::offchain::{
+	testing::{TestOffchainExt, TestTransactionPoolExt},
+	OffchainDbExt, OffchainWorkerExt, TransactionPoolExt,
 };
-use std::fmt::Debug;
+use sp_externalities::Extensions;
+use sp_keystore::{testing::KeyStore, KeystoreExt, SyncCryptoStorePtr};
+use sp_runtime::traits::{Block as BlockT, Header as HeaderT, NumberFor};
+use sp_state_machine::StateMachine;
+use std::{fmt::Debug, sync::Arc};
 
 impl BenchmarkCmd {
 	/// Runs the command and benchmarks the chain.
@@ -41,15 +42,28 @@ impl BenchmarkCmd {
 		<BB as BlockT>::Hash: std::str::FromStr,
 		ExecDispatch: NativeExecutionDispatch + 'static,
 	{
+		if let Some(output_path) = &self.output {
+			if !output_path.is_dir() && output_path.file_name().is_none() {
+				return Err("Output file or path is invalid!".into())
+			}
+		}
+
+		if let Some(header_file) = &self.header {
+			if !header_file.is_file() { return Err("Header file is invalid!".into()) };
+		}
+
+		if let Some(handlebars_template_file) = &self.template {
+			if !handlebars_template_file.is_file() { return Err("Handlebars template file is invalid!".into()) };
+		}
+
 		let spec = config.chain_spec;
 		let wasm_method = self.wasm_method.into();
 		let strategy = self.execution.unwrap_or(ExecutionStrategy::Native);
 
 		let genesis_storage = spec.build_storage()?;
 		let mut changes = Default::default();
-		let mut offchain_changes = Default::default();
 		let cache_size = Some(self.database_cache_size as usize);
-		let state = BenchmarkingState::<BB>::new(genesis_storage, cache_size)?;
+		let state = BenchmarkingState::<BB>::new(genesis_storage, cache_size, self.record_proof)?;
 		let executor = NativeExecutor::<ExecDispatch>::new(
 			wasm_method,
 			self.heap_pages,
@@ -57,15 +71,17 @@ impl BenchmarkCmd {
 		);
 
 		let mut extensions = Extensions::default();
-		extensions.register(KeystoreExt(KeyStore::new()));
+		extensions.register(KeystoreExt(Arc::new(KeyStore::new()) as SyncCryptoStorePtr));
 		let (offchain, _) = TestOffchainExt::new();
-		extensions.register(OffchainExt::new(offchain));
+		let (pool, _) = TestTransactionPoolExt::new();
+		extensions.register(OffchainWorkerExt::new(offchain.clone()));
+		extensions.register(OffchainDbExt::new(offchain));
+		extensions.register(TransactionPoolExt::new(pool));
 
 		let result = StateMachine::<_, _, NumberFor<BB>, _>::new(
 			&state,
 			None,
 			&mut changes,
-			&mut offchain_changes,
 			&executor,
 			"Benchmark_dispatch_benchmark",
 			&(
@@ -85,19 +101,16 @@ impl BenchmarkCmd {
 		.execute(strategy.into())
 		.map_err(|e| format!("Error executing runtime benchmark: {:?}", e))?;
 
-		let results = <std::result::Result<Vec<BenchmarkBatch>, String> as Decode>::decode(&mut &result[..])
+		let results = <std::result::Result<
+				(Vec<BenchmarkBatch>, Vec<StorageInfo>),
+				String,
+			> as Decode>::decode(&mut &result[..])
 			.map_err(|e| format!("Failed to decode benchmark results: {:?}", e))?;
 
 		match results {
-			Ok(batches) => {
-				// If we are going to output results to a file...
-				if self.output {
-					if self.weight_trait {
-						let mut file = crate::writer::open_file("traits.rs")?;
-						crate::writer::write_trait(&mut file, batches.clone())?;
-					} else {
-						crate::writer::write_results(&batches)?;
-					}
+			Ok((batches, storage_info)) => {
+				if let Some(output_path) = &self.output {
+					crate::writer::write_results(&batches, &storage_info, output_path, self)?;
 				}
 
 				for batch in batches.into_iter() {
@@ -119,19 +132,21 @@ impl BenchmarkCmd {
 						// Print the table header
 						batch.results[0].components.iter().for_each(|param| print!("{:?},", param.0));
 
-						print!("extrinsic_time,storage_root_time,reads,repeat_reads,writes,repeat_writes\n");
+						print!("extrinsic_time_ns,storage_root_time_ns,reads,repeat_reads,writes,repeat_writes,proof_size_bytes\n");
 						// Print the values
 						batch.results.iter().for_each(|result| {
+
 							let parameters = &result.components;
 							parameters.iter().for_each(|param| print!("{:?},", param.1));
 							// Print extrinsic time and storage root time
-							print!("{:?},{:?},{:?},{:?},{:?},{:?}\n",
+							print!("{:?},{:?},{:?},{:?},{:?},{:?},{:?}\n",
 								result.extrinsic_time,
 								result.storage_root_time,
 								result.reads,
 								result.repeat_reads,
 								result.writes,
 								result.repeat_writes,
+								result.proof_size,
 							);
 						});
 
@@ -165,7 +180,7 @@ impl BenchmarkCmd {
 					}
 				}
 			},
-			Err(error) => eprintln!("Error: {:?}", error),
+			Err(error) => eprintln!("Error: {}", error),
 		}
 
 		Ok(())

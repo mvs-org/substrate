@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ pub type Backend = sc_client_db::Backend<node_primitives::Block>;
 /// Test client type.
 pub type Client = client::Client<
 	Backend,
-	client::LocalCallExecutor<Backend, Executor>,
+	client::LocalCallExecutor<node_primitives::Block, Backend, Executor>,
 	node_primitives::Block,
 	node_runtime::RuntimeApi,
 >;
@@ -63,7 +63,7 @@ pub trait TestClientBuilderExt: Sized {
 
 impl TestClientBuilderExt for substrate_test_client::TestClientBuilder<
 	node_primitives::Block,
-	client::LocalCallExecutor<Backend, Executor>,
+	client::LocalCallExecutor<node_primitives::Block, Backend, Executor>,
 	Backend,
 	GenesisParameters,
 > {

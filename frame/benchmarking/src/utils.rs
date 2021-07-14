@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +20,8 @@
 use codec::{Encode, Decode};
 use sp_std::{vec::Vec, prelude::Box};
 use sp_io::hashing::blake2_256;
-use sp_runtime::RuntimeString;
 use sp_storage::TrackedStorageKey;
+use frame_support::traits::StorageInfo;
 
 /// An alphabet of possible parameters to use for benchmarking.
 #[derive(Encode, Decode, Clone, Copy, PartialEq, Debug)]
@@ -43,6 +43,8 @@ impl std::fmt::Display for BenchmarkParameter {
 pub struct BenchmarkBatch {
 	/// The pallet containing this benchmark.
 	pub pallet: Vec<u8>,
+	/// The instance of this pallet being benchmarked.
+	pub instance: Vec<u8>,
 	/// The extrinsic (or benchmark name) of this benchmark.
 	pub benchmark: Vec<u8>,
 	/// The results from this benchmark.
@@ -61,6 +63,8 @@ pub struct BenchmarkResults {
 	pub repeat_reads: u32,
 	pub writes: u32,
 	pub repeat_writes: u32,
+	pub proof_size: u32,
+	pub keys: Vec<(Vec<u8>, u32, u32, bool)>,
 }
 
 /// Configuration used to setup and run runtime benchmarks.
@@ -88,7 +92,8 @@ sp_api::decl_runtime_apis! {
 	/// Runtime api for benchmarking a FRAME runtime.
 	pub trait Benchmark {
 		/// Dispatch the given benchmark.
-		fn dispatch_benchmark(config: BenchmarkConfig) -> Result<Vec<BenchmarkBatch>, RuntimeString>;
+		fn dispatch_benchmark(config: BenchmarkConfig)
+			-> Result<(Vec<BenchmarkBatch>, Vec<StorageInfo>), sp_runtime::RuntimeString>;
 	}
 }
 
@@ -141,11 +146,9 @@ pub trait Benchmarking {
 		match whitelist.iter_mut().find(|x| x.key == add.key) {
 			// If we already have this key in the whitelist, update to be the most constrained value.
 			Some(item) => {
-				*item = TrackedStorageKey {
-					key: add.key,
-					has_been_read: item.has_been_read || add.has_been_read,
-					has_been_written: item.has_been_written || add.has_been_written,
-				}
+				item.reads += add.reads;
+				item.writes += add.writes;
+				item.whitelisted = item.whitelisted || add.whitelisted;
 			},
 			// If the key does not exist, add it.
 			None => {
@@ -160,6 +163,15 @@ pub trait Benchmarking {
 		let mut whitelist = self.get_whitelist();
 		whitelist.retain(|x| x.key != remove);
 		self.set_whitelist(whitelist);
+	}
+
+	fn get_read_and_written_keys(&self) -> Vec<(Vec<u8>, u32, u32, bool)> {
+		self.get_read_and_written_keys()
+	}
+
+	/// Get current estimated proof size.
+	fn proof_size(&self) -> Option<u32> {
+		self.proof_size()
 	}
 }
 
@@ -218,4 +230,13 @@ pub fn account<AccountId: Decode + Default>(name: &'static str, index: u32, seed
 /// This caller account is automatically whitelisted for DB reads/writes by the benchmarking macro.
 pub fn whitelisted_caller<AccountId: Decode + Default>() -> AccountId {
 	account::<AccountId>("whitelisted_caller", 0, 0)
+}
+
+#[macro_export]
+macro_rules! whitelist_account {
+	($acc:ident) => {
+		frame_benchmarking::benchmarking::add_to_whitelist(
+			frame_system::Account::<T>::hashed_key_for(&$acc).into()
+		);
+	}
 }

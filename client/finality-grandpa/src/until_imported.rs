@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -48,7 +48,8 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use wasm_timer::Instant;
 
 const LOG_PENDING_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -135,12 +136,14 @@ impl Drop for Metrics {
 	fn drop(&mut self) {
 		// Reduce the global counter by the amount of messages that were still left in the dropped
 		// queue.
-		self.global_waiting_messages.sub(self.local_waiting_messages)
+		self.global_waiting_messages
+			.sub(self.local_waiting_messages)
 	}
 }
 
 /// Buffering incoming messages until blocks with given hashes are imported.
-pub(crate) struct UntilImported<Block, BlockStatus, BlockSyncRequester, I, M> where
+pub(crate) struct UntilImported<Block, BlockStatus, BlockSyncRequester, I, M>
+where
 	Block: BlockT,
 	I: Stream<Item = M::Blocked> + Unpin,
 	M: BlockUntilImported<Block>,
@@ -151,7 +154,7 @@ pub(crate) struct UntilImported<Block, BlockStatus, BlockSyncRequester, I, M> wh
 	incoming_messages: Fuse<I>,
 	ready: VecDeque<M::Blocked>,
 	/// Interval at which to check status of each awaited block.
-	check_pending: Pin<Box<dyn Stream<Item = Result<(), std::io::Error>> + Send + Sync>>,
+	check_pending: Pin<Box<dyn Stream<Item = Result<(), std::io::Error>> + Send>>,
 	/// Mapping block hashes to their block number, the point in time it was
 	/// first encountered (Instant) and a list of GRANDPA messages referencing
 	/// the block hash.
@@ -163,13 +166,18 @@ pub(crate) struct UntilImported<Block, BlockStatus, BlockSyncRequester, I, M> wh
 	metrics: Option<Metrics>,
 }
 
-impl<Block, BlockStatus, BlockSyncRequester, I, M> Unpin for UntilImported<Block, BlockStatus, BlockSyncRequester, I, M > where
+impl<Block, BlockStatus, BlockSyncRequester, I, M> Unpin
+	for UntilImported<Block, BlockStatus, BlockSyncRequester, I, M>
+where
 	Block: BlockT,
 	I: Stream<Item = M::Blocked> + Unpin,
 	M: BlockUntilImported<Block>,
-{}
+{
+}
 
-impl<Block, BlockStatus, BlockSyncRequester, I, M> UntilImported<Block, BlockStatus, BlockSyncRequester, I, M> where
+impl<Block, BlockStatus, BlockSyncRequester, I, M>
+	UntilImported<Block, BlockStatus, BlockSyncRequester, I, M>
+where
 	Block: BlockT,
 	BlockStatus: BlockStatusT<Block>,
 	BlockSyncRequester: BlockSyncRequesterT<Block>,
@@ -987,7 +995,7 @@ mod tests {
 		threads_pool.spawn_ok(until_imported.into_future().map(|_| ()));
 
 		// assert that we will make sync requests
-		let assert = futures::future::poll_fn(|_| {
+		let assert = futures::future::poll_fn(|ctx| {
 			let block_sync_requests = block_sync_requester.requests.lock();
 
 			// we request blocks targeted by the precommits that aren't imported
@@ -996,6 +1004,11 @@ mod tests {
 			{
 				return Poll::Ready(());
 			}
+
+			// NOTE: nothing in this function is future-aware (i.e nothing gets registered to wake
+			// up this future), we manually wake up this task to avoid having to wait until the
+			// timeout below triggers.
+			ctx.waker().wake_by_ref();
 
 			Poll::Pending
 		});

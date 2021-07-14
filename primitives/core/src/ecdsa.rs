@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +23,7 @@
 use sp_std::vec::Vec;
 
 use sp_std::cmp::Ordering;
-use codec::{Encode, Decode};
+use codec::{Encode, Decode, MaxEncodedLen};
 
 #[cfg(feature = "full_crypto")]
 use core::convert::{TryFrom, TryInto};
@@ -52,8 +52,8 @@ pub const CRYPTO_ID: CryptoTypeId = CryptoTypeId(*b"ecds");
 type Seed = [u8; 32];
 
 /// The ECDSA compressed public key.
-#[derive(Clone, Encode, Decode, PassByInner)]
-pub struct Public([u8; 33]);
+#[derive(Clone, Encode, Decode, PassByInner, MaxEncodedLen)]
+pub struct Public(pub [u8; 33]);
 
 impl PartialOrd for Public {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -228,7 +228,7 @@ impl sp_std::hash::Hash for Public {
 
 /// A signature (a 512-bit value, plus 8 bits for recovery ID).
 #[derive(Encode, Decode, PassByInner)]
-pub struct Signature([u8; 65]);
+pub struct Signature(pub [u8; 65]);
 
 impl sp_std::convert::TryFrom<&[u8]> for Signature {
 	type Error = ();
@@ -256,8 +256,8 @@ impl<'de> Deserialize<'de> for Signature {
 	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
 		let signature_hex = hex::decode(&String::deserialize(deserializer)?)
 			.map_err(|e| de::Error::custom(format!("{:?}", e)))?;
-		Ok(Signature::try_from(signature_hex.as_ref())
-			.map_err(|e| de::Error::custom(format!("{:?}", e)))?)
+		Signature::try_from(signature_hex.as_ref())
+			.map_err(|e| de::Error::custom(format!("{:?}", e)))
 	}
 }
 
@@ -353,6 +353,18 @@ impl Signature {
 		secp256k1::recover(&message, &sig.0, &sig.1)
 			.ok()
 			.map(|recovered| Public(recovered.serialize_compressed()))
+	}
+
+	/// Recover the public key from this signature and a pre-hashed message.
+	#[cfg(feature = "full_crypto")]
+	pub fn recover_prehashed(&self, message: &[u8; 32]) -> Option<Public> {
+		let message = secp256k1::Message::parse(message);
+		
+		let sig: (_, _) = self.try_into().ok()?;
+
+		secp256k1::recover(&message, &sig.0, &sig.1)
+			.ok()
+			.map(|key| Public(key.serialize_compressed()))
 	}
 }
 
@@ -453,7 +465,7 @@ impl TraitPair for Pair {
 		let secret = SecretKey::parse_slice(seed_slice)
 			.map_err(|_| SecretStringError::InvalidSeedLength)?;
 		let public = PublicKey::from_secret_key(&secret);
-		Ok(Pair{ secret, public })
+		Ok(Pair{ public, secret })
 	}
 
 	/// Derive a child key from a series of given junctions.
@@ -487,7 +499,7 @@ impl TraitPair for Pair {
 		let message = secp256k1::Message::parse(&blake2_256(message.as_ref()));
 		let sig: (_, _) = match sig.try_into() { Ok(x) => x, _ => return false };
 		match secp256k1::recover(&message, &sig.0, &sig.1) {
-			Ok(actual) => &pubkey.0[..] == &actual.serialize_compressed()[..],
+			Ok(actual) => pubkey.0[..] == actual.serialize_compressed()[..],
 			_ => false,
 		}
 	}
@@ -525,12 +537,34 @@ impl Pair {
 	#[cfg(feature = "std")]
 	pub fn from_legacy_string(s: &str, password_override: Option<&str>) -> Pair {
 		Self::from_string(s, password_override).unwrap_or_else(|_| {
-			let mut padded_seed: Seed = [' ' as u8; 32];
+			let mut padded_seed: Seed = [b' '; 32];
 			let len = s.len().min(32);
 			padded_seed[..len].copy_from_slice(&s.as_bytes()[..len]);
 			Self::from_seed(&padded_seed)
 		})
 	}
+
+	/// Sign a pre-hashed message
+	pub fn sign_prehashed(&self, message: &[u8; 32]) -> Signature {
+		let message = secp256k1::Message::parse(message);
+		secp256k1::sign(&message, &self.secret).into()
+	}
+
+	/// Verify a signature on a pre-hashed message. Return `true` if the signature is valid
+	/// and thus matches the given `public` key.
+	pub fn verify_prehashed(sig: &Signature, message: &[u8; 32], public: &Public) -> bool {
+		let message = secp256k1::Message::parse(message);
+	
+		let sig: (_, _) = match sig.try_into() {
+			Ok(x) => x,
+			_ => return false,
+		};
+	
+		match secp256k1::recover(&message, &sig.0, &sig.1) {
+			Ok(actual) => public.0[..] == actual.serialize_compressed()[..],
+			_ => false,
+		}
+	}	
 }
 
 impl CryptoType for Public {
@@ -552,8 +586,9 @@ impl CryptoType for Pair {
 mod test {
 	use super::*;
 	use hex_literal::hex;
-	use crate::crypto::{DEV_PHRASE, set_default_ss58_version};
+	use crate::{crypto::{DEV_PHRASE, set_default_ss58_version}, keccak_256};
 	use serde_json;
+	use crate::crypto::PublicError;
 
 	#[test]
 	fn default_phrase_should_be_used() {
@@ -591,7 +626,7 @@ mod test {
 		let message = b"";
 		let signature = hex!("3dde91174bd9359027be59a428b8146513df80a2a3c7eda2194f64de04a69ab97b753169e94db6ffd50921a2668a48b94ca11e3d32c1ff19cfe88890aa7e8f3c00");
 		let signature = Signature::from_raw(signature);
-		assert!(&pair.sign(&message[..]) == &signature);
+		assert!(pair.sign(&message[..]) == signature);
 		assert!(Pair::verify(&signature, &message[..], &public));
 	}
 
@@ -611,7 +646,7 @@ mod test {
 		let message = b"";
 		let signature = hex!("3dde91174bd9359027be59a428b8146513df80a2a3c7eda2194f64de04a69ab97b753169e94db6ffd50921a2668a48b94ca11e3d32c1ff19cfe88890aa7e8f3c00");
 		let signature = Signature::from_raw(signature);
-		assert!(&pair.sign(&message[..]) == &signature);
+		assert!(pair.sign(&message[..]) == signature);
 		assert!(Pair::verify(&signature, &message[..], &public));
 	}
 
@@ -677,19 +712,65 @@ mod test {
 	}
 
 	#[test]
-	fn ss58check_custom_format_works() {
+	fn ss58check_format_check_works() {
 		use crate::crypto::Ss58AddressFormat;
-		// temp save default format version
-		let default_format = Ss58AddressFormat::default();
-		// set current ss58 version is custom "200" `Ss58AddressFormat::Custom(200)`
-		set_default_ss58_version(Ss58AddressFormat::Custom(200));
-		// custom addr encoded by version 200
-		let addr = "2X64kMNEWAW5KLZMSKcGKEc96MyuaRsRUku7vomuYxKgqjVCRj";
-		Public::from_ss58check(&addr).unwrap();
-		set_default_ss58_version(default_format);
-		// set  current ss58 version to default version
-		let addr = "KWAfgC2aRG5UVD6CpbPQXCx4YZZUhvWqqAJE6qcYc9Rtr6g5C";
-		Public::from_ss58check(&addr).unwrap();
+		let pair = Pair::from_seed(b"12345678901234567890123456789012");
+		let public = pair.public();
+		let format = Ss58AddressFormat::Reserved46;
+		let s = public.to_ss58check_with_version(format);
+		assert_eq!(Public::from_ss58check_with_version(&s), Err(PublicError::FormatNotAllowed));
+	}
+
+	#[test]
+	fn ss58check_full_roundtrip_works() {
+		use crate::crypto::Ss58AddressFormat;
+		let pair = Pair::from_seed(b"12345678901234567890123456789012");
+		let public = pair.public();
+		let format = Ss58AddressFormat::PolkadotAccount;
+		let s = public.to_ss58check_with_version(format);
+		let (k, f) = Public::from_ss58check_with_version(&s).unwrap();
+		assert_eq!(k, public);
+		assert_eq!(f, format);
+
+		let format = Ss58AddressFormat::Custom(64);
+		let s = public.to_ss58check_with_version(format);
+		let (k, f) = Public::from_ss58check_with_version(&s).unwrap();
+		assert_eq!(k, public);
+		assert_eq!(f, format);
+	}
+
+	#[test]
+	fn ss58check_custom_format_works() {
+		// We need to run this test in its own process to not interfere with other tests running in
+		// parallel and also relying on the ss58 version.
+		if std::env::var("RUN_CUSTOM_FORMAT_TEST") == Ok("1".into()) {
+			use crate::crypto::Ss58AddressFormat;
+			// temp save default format version
+			let default_format = Ss58AddressFormat::default();
+			// set current ss58 version is custom "200" `Ss58AddressFormat::Custom(200)`
+
+			set_default_ss58_version(Ss58AddressFormat::Custom(200));
+			// custom addr encoded by version 200
+			let addr = "4pbsSkWcBaYoFHrKJZp5fDVUKbqSYD9dhZZGvpp3vQ5ysVs5ybV";
+			Public::from_ss58check(&addr).unwrap();
+
+			set_default_ss58_version(default_format);
+			// set current ss58 version to default version
+			let addr = "KWAfgC2aRG5UVD6CpbPQXCx4YZZUhvWqqAJE6qcYc9Rtr6g5C";
+			Public::from_ss58check(&addr).unwrap();
+
+			println!("CUSTOM_FORMAT_SUCCESSFUL");
+		} else {
+			let executable = std::env::current_exe().unwrap();
+			let output = std::process::Command::new(executable)
+				.env("RUN_CUSTOM_FORMAT_TEST", "1")
+				.args(&["--nocapture", "ss58check_custom_format_works"])
+				.output()
+				.unwrap();
+
+			let output = String::from_utf8(output.stdout).unwrap();
+			assert!(output.contains("CUSTOM_FORMAT_SUCCESSFUL"));
+		}
 	}
 
 	#[test]
@@ -707,11 +788,68 @@ mod test {
 	#[test]
 	fn signature_serialization_doesnt_panic() {
 		fn deserialize_signature(text: &str) -> Result<Signature, serde_json::error::Error> {
-			Ok(serde_json::from_str(text)?)
+			serde_json::from_str(text)
 		}
 		assert!(deserialize_signature("Not valid json.").is_err());
 		assert!(deserialize_signature("\"Not an actual signature.\"").is_err());
 		// Poorly-sized
 		assert!(deserialize_signature("\"abc123\"").is_err());
+	}
+
+	#[test]
+	fn sign_prehashed_works() {
+		let (pair, _, _) = Pair::generate_with_phrase(Some("password"));
+
+		// `msg` shouldn't be mangled
+		let msg = [0u8; 32];
+		let sig1 = pair.sign_prehashed(&msg);
+		let sig2: Signature = secp256k1::sign(&secp256k1::Message::parse(&msg), &pair.secret).into();
+
+		assert_eq!(sig1, sig2);
+
+		// signature is actually different
+		let sig2 = pair.sign(&msg);
+
+		assert_ne!(sig1, sig2);
+
+		// using pre-hashed `msg` works
+		let msg = keccak_256(b"this should be hashed");
+		let sig1 = pair.sign_prehashed(&msg);
+		let sig2: Signature = secp256k1::sign(&secp256k1::Message::parse(&msg), &pair.secret).into();
+
+		assert_eq!(sig1, sig2);		
+	}
+
+	#[test]
+	fn verify_prehashed_works() {
+		let (pair, _, _) = Pair::generate_with_phrase(Some("password"));
+		
+		// `msg` and `sig` match
+		let msg = keccak_256(b"this should be hashed");
+		let sig = pair.sign_prehashed(&msg);
+		assert!(Pair::verify_prehashed(&sig, &msg, &pair.public()));
+
+		// `msg` and `sig` don't match
+		let msg = keccak_256(b"this is a different message");
+		assert!(!Pair::verify_prehashed(&sig, &msg, &pair.public()));
+	}
+
+	#[test]
+	fn recover_prehashed_works() {
+		let (pair, _, _) = Pair::generate_with_phrase(Some("password"));
+
+		// recovered key matches signing key
+		let msg = keccak_256(b"this should be hashed");
+		let sig = pair.sign_prehashed(&msg);
+		let key = sig.recover_prehashed(&msg).unwrap();
+		assert_eq!(pair.public(), key);
+
+		// recovered key is useable
+		assert!(Pair::verify_prehashed(&sig, &msg, &key));
+
+		// recovered key and signing key don't match
+		let msg = keccak_256(b"this is a different message");
+		let key = sig.recover_prehashed(&msg).unwrap();
+		assert_ne!(pair.public(), key);
 	}
 }

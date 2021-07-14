@@ -1,18 +1,20 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! Chain Spec extensions helpers.
 
@@ -231,7 +233,7 @@ impl<B, E> Extension for Forks<B, E> where
 
 	fn get<T: 'static>(&self) -> Option<&T> {
 		match TypeId::of::<T>() {
-			x if x == TypeId::of::<E>() => Any::downcast_ref(&self.base),
+			x if x == TypeId::of::<E>() => <dyn Any>::downcast_ref(&self.base),
 			_ => self.base.get(),
 		}
 	}
@@ -250,7 +252,7 @@ impl<B, E> Extension for Forks<B, E> where
 		<<Self::Forks as IsForks>::Extension as Group>::Fork: Extension,
 	{
 		if TypeId::of::<BlockNumber>() == TypeId::of::<B>() {
-			Any::downcast_ref(&self.for_type::<T>()?).cloned()
+			<dyn Any>::downcast_ref(&self.for_type::<T>()?).cloned()
 		} else {
 			self.get::<Forks<BlockNumber, <Self::Forks as IsForks>::Extension>>()?
 				.for_type()
@@ -273,7 +275,7 @@ impl <E: Extension> GetExtension for E {
 /// Helper function that queries an extension by type from `GetExtension`
 /// trait object.
 pub fn get_extension<T: 'static>(e: &dyn GetExtension) -> Option<&T> {
-	Any::downcast_ref(GetExtension::get_any(e, TypeId::of::<T>()))
+	<dyn Any>::downcast_ref(GetExtension::get_any(e, TypeId::of::<T>()))
 }
 
 #[cfg(test)]

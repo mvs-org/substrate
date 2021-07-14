@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -34,10 +34,9 @@ use sp_consensus_babe::{
 use serde::{Deserialize, Serialize};
 use sp_core::{
 	crypto::Public,
-	traits::BareCryptoStore,
 };
 use sp_application_crypto::AppKey;
-use sc_keystore::KeyStorePtr;
+use sp_keystore::{SyncCryptoStorePtr, SyncCryptoStore};
 use sc_rpc_api::DenyUnsafe;
 use sp_api::{ProvideRuntimeApi, BlockId};
 use sp_runtime::traits::{Block as BlockT, Header as _};
@@ -63,7 +62,7 @@ pub struct BabeRpcHandler<B: BlockT, C, SC> {
 	/// shared reference to EpochChanges
 	shared_epoch_changes: SharedEpochChanges<B, Epoch>,
 	/// shared reference to the Keystore
-	keystore: KeyStorePtr,
+	keystore: SyncCryptoStorePtr,
 	/// config (actually holds the slot duration)
 	babe_config: Config,
 	/// The SelectChain strategy
@@ -77,7 +76,7 @@ impl<B: BlockT, C, SC> BabeRpcHandler<B, C, SC> {
 	pub fn new(
 		client: Arc<C>,
 		shared_epoch_changes: SharedEpochChanges<B, Epoch>,
-		keystore: KeyStorePtr,
+		keystore: SyncCryptoStorePtr,
 		babe_config: Config,
 		select_chain: SC,
 		deny_unsafe: DenyUnsafe,
@@ -94,11 +93,14 @@ impl<B: BlockT, C, SC> BabeRpcHandler<B, C, SC> {
 }
 
 impl<B, C, SC> BabeApi for BabeRpcHandler<B, C, SC>
-	where
-		B: BlockT,
-		C: ProvideRuntimeApi<B> + HeaderBackend<B> + HeaderMetadata<B, Error=BlockChainError> + 'static,
-		C::Api: BabeRuntimeApi<B>,
-		SC: SelectChain<B> + Clone + 'static,
+where
+	B: BlockT,
+	C: ProvideRuntimeApi<B>
+		+ HeaderBackend<B>
+		+ HeaderMetadata<B, Error = BlockChainError>
+		+ 'static,
+	C::Api: BabeRuntimeApi<B>,
+	SC: SelectChain<B> + Clone + 'static,
 {
 	fn epoch_authorship(&self) -> FutureResult<HashMap<AuthorityId, EpochAuthorship>> {
 		if let Err(err) = self.deny_unsafe.check_if_safe() {
@@ -119,23 +121,33 @@ impl<B, C, SC> BabeApi for BabeRpcHandler<B, C, SC>
 			self.select_chain.clone(),
 		);
 		let future = async move {
-			let header = select_chain.best_chain().map_err(Error::Consensus)?;
-			let epoch_start = client.runtime_api()
+			let header = select_chain.best_chain().map_err(Error::Consensus).await?;
+			let epoch_start = client
+				.runtime_api()
 				.current_epoch_start(&BlockId::Hash(header.hash()))
-				.map_err(|err| {
-					Error::StringError(format!("{:?}", err))
-				})?;
-			let epoch = epoch_data(&shared_epoch, &client, &babe_config, epoch_start, &select_chain)?;
+				.map_err(|err| Error::StringError(format!("{:?}", err)))?;
+			let epoch = epoch_data(
+				&shared_epoch,
+				&client,
+				&babe_config,
+				*epoch_start,
+				&select_chain,
+			)
+			.await?;
 			let (epoch_start, epoch_end) = (epoch.start_slot(), epoch.end_slot());
 
 			let mut claims: HashMap<AuthorityId, EpochAuthorship> = HashMap::new();
 
 			let keys = {
-				let ks = keystore.read();
-				epoch.authorities.iter()
+				epoch
+					.authorities
+					.iter()
 					.enumerate()
 					.filter_map(|(i, a)| {
-						if ks.has_keys(&[(a.0.to_raw_vec(), AuthorityId::ID)]) {
+						if SyncCryptoStore::has_keys(
+							&*keystore,
+							&[(a.0.to_raw_vec(), AuthorityId::ID)],
+						) {
 							Some((a.0.clone(), i))
 						} else {
 							None
@@ -144,32 +156,33 @@ impl<B, C, SC> BabeApi for BabeRpcHandler<B, C, SC>
 					.collect::<Vec<_>>()
 			};
 
-			for slot_number in epoch_start..epoch_end {
+			for slot in *epoch_start..*epoch_end {
 				if let Some((claim, key)) =
-					authorship::claim_slot_using_keys(slot_number, &epoch, &keystore, &keys)
+					authorship::claim_slot_using_keys(slot.into(), &epoch, &keystore, &keys)
 				{
 					match claim {
 						PreDigest::Primary { .. } => {
-							claims.entry(key).or_default().primary.push(slot_number);
+							claims.entry(key).or_default().primary.push(slot);
 						}
 						PreDigest::SecondaryPlain { .. } => {
-							claims.entry(key).or_default().secondary.push(slot_number);
+							claims.entry(key).or_default().secondary.push(slot);
 						}
 						PreDigest::SecondaryVRF { .. } => {
-							claims.entry(key).or_default().secondary_vrf.push(slot_number);
+							claims.entry(key).or_default().secondary_vrf.push(slot.into());
 						},
 					};
 				}
 			}
 
 			Ok(claims)
-		}.boxed();
+		}
+		.boxed();
 
 		Box::new(future.compat())
 	}
 }
 
-/// Holds information about the `slot_number`'s that can be claimed by a given key.
+/// Holds information about the `slot`'s that can be claimed by a given key.
 #[derive(Default, Debug, Deserialize, Serialize)]
 pub struct EpochAuthorship {
 	/// the array of primary slots that can be claimed
@@ -199,25 +212,25 @@ impl From<Error> for jsonrpc_core::Error {
 	}
 }
 
-/// fetches the epoch data for a given slot_number.
-fn epoch_data<B, C, SC>(
+/// Fetches the epoch data for a given slot.
+async fn epoch_data<B, C, SC>(
 	epoch_changes: &SharedEpochChanges<B, Epoch>,
 	client: &Arc<C>,
 	babe_config: &Config,
-	slot_number: u64,
+	slot: u64,
 	select_chain: &SC,
 ) -> Result<Epoch, Error>
-	where
-		B: BlockT,
-		C: HeaderBackend<B> + HeaderMetadata<B, Error=BlockChainError> + 'static,
-		SC: SelectChain<B>,
+where
+	B: BlockT,
+	C: HeaderBackend<B> + HeaderMetadata<B, Error = BlockChainError> + 'static,
+	SC: SelectChain<B>,
 {
-	let parent = select_chain.best_chain()?;
-	epoch_changes.lock().epoch_data_for_child_of(
+	let parent = select_chain.best_chain().await?;
+	epoch_changes.shared_data().epoch_data_for_child_of(
 		descendent_query(&**client),
 		&parent.hash(),
 		parent.number().clone(),
-		slot_number,
+		slot.into(),
 		|slot| Epoch::genesis(&babe_config, slot),
 	)
 		.map_err(|e| Error::Consensus(ConsensusError::ChainLookup(format!("{:?}", e))))?
@@ -236,18 +249,23 @@ mod tests {
 		TestClientBuilder,
 	};
 	use sp_application_crypto::AppPair;
-	use sp_keyring::Ed25519Keyring;
-	use sc_keystore::Store;
+	use sp_keyring::Sr25519Keyring;
+	use sp_core::{crypto::key_types::BABE};
+	use sp_keystore::{SyncCryptoStorePtr, SyncCryptoStore};
+	use sc_keystore::LocalKeystore;
 
 	use std::sync::Arc;
 	use sc_consensus_babe::{Config, block_import, AuthorityPair};
 	use jsonrpc_core::IoHandler;
 
 	/// creates keystore backed by a temp file
-	fn create_temp_keystore<P: AppPair>(authority: Ed25519Keyring) -> (KeyStorePtr, tempfile::TempDir) {
+	fn create_temp_keystore<P: AppPair>(
+		authority: Sr25519Keyring,
+	) -> (SyncCryptoStorePtr, tempfile::TempDir) {
 		let keystore_path = tempfile::tempdir().expect("Creates keystore path");
-		let keystore = Store::open(keystore_path.path(), None).expect("Creates keystore");
-		keystore.write().insert_ephemeral_from_seed::<P>(&authority.to_seed())
+		let keystore = Arc::new(LocalKeystore::open(keystore_path.path(), None)
+			.expect("Creates keystore"));
+		SyncCryptoStore::sr25519_generate_new(&*keystore, BABE, Some(&authority.to_seed()))
 			.expect("Creates authority key");
 
 		(keystore, keystore_path)
@@ -267,7 +285,7 @@ mod tests {
 		).expect("can initialize block-import");
 
 		let epoch_changes = link.epoch_changes().clone();
-		let keystore = create_temp_keystore::<AuthorityPair>(Ed25519Keyring::Alice).0;
+		let keystore = create_temp_keystore::<AuthorityPair>(Sr25519Keyring::Alice).0;
 
 		BabeRpcHandler::new(
 			client.clone(),

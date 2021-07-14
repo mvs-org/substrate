@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// The `generate` command
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Clone)]
 #[structopt(name = "generate", about = "Generate a random account")]
 pub struct GenerateCmd {
 	/// The number of words in the phrase to generate. One of 12 (default), 15, 18, 21 and 24.
@@ -70,7 +70,7 @@ impl GenerateCmd {
 				mnemonic.phrase(),
 				password,
 				self.network_scheme.network.clone(),
-				output
+				output,
 			)
 		);
 		Ok(())

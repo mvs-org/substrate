@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,13 +28,13 @@
 
 use std::collections::HashMap;
 
-use sp_runtime::{Justification, traits::{Block as BlockT, Header as _, NumberFor}};
+use sp_runtime::{Justifications, traits::{Block as BlockT, Header as _, NumberFor}};
 
 use crate::{
 	error::Error as ConsensusError,
 	block_import::{
 		BlockImport, BlockOrigin, BlockImportParams, ImportedAux, JustificationImport, ImportResult,
-		BlockCheckParams, FinalityProofImport,
+		BlockCheckParams, ImportedState, StateAction,
 	},
 	metrics::Metrics,
 };
@@ -56,11 +56,6 @@ pub type BoxBlockImport<B, Transaction> = Box<
 /// Shared justification import struct used by the queue.
 pub type BoxJustificationImport<B> = Box<dyn JustificationImport<B, Error=ConsensusError> + Send + Sync>;
 
-/// Shared finality proof import struct used by the queue.
-pub type BoxFinalityProofImport<B> = Box<
-	dyn FinalityProofImport<B, Error = ConsensusError> + Send + Sync
->;
-
 /// Maps to the Origin used by the network.
 pub type Origin = libp2p::PeerId;
 
@@ -73,29 +68,34 @@ pub struct IncomingBlock<B: BlockT> {
 	pub header: Option<<B as BlockT>::Header>,
 	/// Block body if requested.
 	pub body: Option<Vec<<B as BlockT>::Extrinsic>>,
-	/// Justification if requested.
-	pub justification: Option<Justification>,
+	/// Justification(s) if requested.
+	pub justifications: Option<Justifications>,
 	/// The peer, we received this from
 	pub origin: Option<Origin>,
 	/// Allow importing the block skipping state verification if parent state is missing.
 	pub allow_missing_state: bool,
+	/// Skip block exection and state verification.
+	pub skip_execution: bool,
 	/// Re-validate existing block.
 	pub import_existing: bool,
+	/// Do not compute new state, but rather set it to the given set.
+	pub state: Option<ImportedState<B>>,
 }
 
 /// Type of keys in the blockchain cache that consensus module could use for its needs.
 pub type CacheKeyId = [u8; 4];
 
 /// Verify a justification of a block
+#[async_trait::async_trait]
 pub trait Verifier<B: BlockT>: Send + Sync {
 	/// Verify the given data and return the BlockImportParams and an optional
 	/// new set of validators to import. If not, err with an Error-Message
 	/// presented to the User in the logs.
-	fn verify(
+	async fn verify(
 		&mut self,
 		origin: BlockOrigin,
 		header: B::Header,
-		justification: Option<Justification>,
+		justifications: Option<Justifications>,
 		body: Option<Vec<B::Extrinsic>>,
 	) -> Result<(BlockImportParams<B, ()>, Option<Vec<(CacheKeyId, Vec<u8>)>>), String>;
 }
@@ -107,23 +107,14 @@ pub trait Verifier<B: BlockT>: Send + Sync {
 pub trait ImportQueue<B: BlockT>: Send {
 	/// Import bunch of blocks.
 	fn import_blocks(&mut self, origin: BlockOrigin, blocks: Vec<IncomingBlock<B>>);
-	/// Import a block justification.
-	fn import_justification(
+	/// Import block justifications.
+	fn import_justifications(
 		&mut self,
 		who: Origin,
 		hash: B::Hash,
 		number: NumberFor<B>,
-		justification: Justification
+		justifications: Justifications
 	);
-	/// Import block finality proof.
-	fn import_finality_proof(
-		&mut self,
-		who: Origin,
-		hash: B::Hash,
-		number: NumberFor<B>,
-		finality_proof: Vec<u8>
-	);
-
 	/// Polls for actions to perform on the network.
 	///
 	/// This method should behave in a way similar to `Future::poll`. It can register the current
@@ -146,26 +137,13 @@ pub trait Link<B: BlockT>: Send {
 	fn justification_imported(&mut self, _who: Origin, _hash: &B::Hash, _number: NumberFor<B>, _success: bool) {}
 	/// Request a justification for the given block.
 	fn request_justification(&mut self, _hash: &B::Hash, _number: NumberFor<B>) {}
-	/// Finality proof import result.
-	///
-	/// Even though we have asked for finality proof of block A, provider could return proof of
-	/// some earlier block B, if the proof for A was too large. The sync module should continue
-	/// asking for proof of A in this case.
-	fn finality_proof_imported(
-		&mut self,
-		_who: Origin,
-		_request_block: (B::Hash, NumberFor<B>),
-		_finalization_result: Result<(B::Hash, NumberFor<B>), ()>,
-	) {}
-	/// Request a finality proof for the given block.
-	fn request_finality_proof(&mut self, _hash: &B::Hash, _number: NumberFor<B>) {}
 }
 
 /// Block import successful result.
 #[derive(Debug, PartialEq)]
-pub enum BlockImportResult<N: ::std::fmt::Debug + PartialEq> {
+pub enum BlockImportResult<N: std::fmt::Debug + PartialEq> {
 	/// Imported known block.
-	ImportedKnown(N),
+	ImportedKnown(N, Option<Origin>),
 	/// Imported unknown block.
 	ImportedUnknown(N, ImportedAux, Option<Origin>),
 }
@@ -190,18 +168,18 @@ pub enum BlockImportError {
 }
 
 /// Single block import function.
-pub fn import_single_block<B: BlockT, V: Verifier<B>, Transaction>(
-	import_handle: &mut dyn BlockImport<B, Transaction = Transaction, Error = ConsensusError>,
+pub async fn import_single_block<B: BlockT, V: Verifier<B>, Transaction: Send + 'static>(
+	import_handle: &mut impl BlockImport<B, Transaction = Transaction, Error = ConsensusError>,
 	block_origin: BlockOrigin,
 	block: IncomingBlock<B>,
 	verifier: &mut V,
 ) -> Result<BlockImportResult<NumberFor<B>>, BlockImportError> {
-	import_single_block_metered(import_handle, block_origin, block, verifier, None)
+	import_single_block_metered(import_handle, block_origin, block, verifier, None).await
 }
 
 /// Single block import function with metering.
-pub(crate) fn import_single_block_metered<B: BlockT, V: Verifier<B>, Transaction>(
-	import_handle: &mut dyn BlockImport<B, Transaction = Transaction, Error = ConsensusError>,
+pub(crate) async fn import_single_block_metered<B: BlockT, V: Verifier<B>, Transaction: Send + 'static>(
+	import_handle: &mut impl BlockImport<B, Transaction = Transaction, Error = ConsensusError>,
 	block_origin: BlockOrigin,
 	block: IncomingBlock<B>,
 	verifier: &mut V,
@@ -209,8 +187,8 @@ pub(crate) fn import_single_block_metered<B: BlockT, V: Verifier<B>, Transaction
 ) -> Result<BlockImportResult<NumberFor<B>>, BlockImportError> {
 	let peer = block.origin;
 
-	let (header, justification) = match (block.header, block.justification) {
-		(Some(header), justification) => (header, justification),
+	let (header, justifications) = match (block.header, block.justifications) {
+		(Some(header), justifications) => (header, justifications),
 		(None, _) => {
 			if let Some(ref peer) = peer {
 				debug!(target: "sync", "Header {} was not provided by {} ", block.hash, peer);
@@ -231,7 +209,7 @@ pub(crate) fn import_single_block_metered<B: BlockT, V: Verifier<B>, Transaction
 		match import {
 			Ok(ImportResult::AlreadyInChain) => {
 				trace!(target: "sync", "Block already in chain {}: {:?}", number, hash);
-				Ok(BlockImportResult::ImportedKnown(number))
+				Ok(BlockImportResult::ImportedKnown(number, peer.clone()))
 			},
 			Ok(ImportResult::Imported(aux)) => Ok(BlockImportResult::ImportedUnknown(number, aux, peer.clone())),
 			Ok(ImportResult::MissingState) => {
@@ -259,24 +237,28 @@ pub(crate) fn import_single_block_metered<B: BlockT, V: Verifier<B>, Transaction
 		parent_hash,
 		allow_missing_state: block.allow_missing_state,
 		import_existing: block.import_existing,
-	}))? {
+	}).await)? {
 		BlockImportResult::ImportedUnknown { .. } => (),
 		r => return Ok(r), // Any other successful result means that the block is already imported.
 	}
 
 	let started = wasm_timer::Instant::now();
-	let (mut import_block, maybe_keys) = verifier.verify(block_origin, header, justification, block.body)
-		.map_err(|msg| {
-			if let Some(ref peer) = peer {
-				trace!(target: "sync", "Verifying {}({}) from {} failed: {}", number, hash, peer, msg);
-			} else {
-				trace!(target: "sync", "Verifying {}({}) failed: {}", number, hash, msg);
-			}
-			if let Some(metrics) = metrics.as_ref() {
-				metrics.report_verification(false, started.elapsed());
-			}
-			BlockImportError::VerificationFailed(peer.clone(), msg)
-		})?;
+	let (mut import_block, maybe_keys) = verifier.verify(
+		block_origin,
+		header,
+		justifications,
+		block.body
+	).await.map_err(|msg| {
+		if let Some(ref peer) = peer {
+			trace!(target: "sync", "Verifying {}({}) from {} failed: {}", number, hash, peer, msg);
+		} else {
+			trace!(target: "sync", "Verifying {}({}) failed: {}", number, hash, msg);
+		}
+		if let Some(metrics) = metrics.as_ref() {
+			metrics.report_verification(false, started.elapsed());
+		}
+		BlockImportError::VerificationFailed(peer.clone(), msg)
+	})?;
 
 	if let Some(metrics) = metrics.as_ref() {
 		metrics.report_verification(true, started.elapsed());
@@ -286,7 +268,19 @@ pub(crate) fn import_single_block_metered<B: BlockT, V: Verifier<B>, Transaction
 	if let Some(keys) = maybe_keys {
 		cache.extend(keys.into_iter());
 	}
-	import_block.allow_missing_state = block.allow_missing_state;
+	import_block.import_existing = block.import_existing;
+	let mut import_block = import_block.clear_storage_changes_and_mutate();
+	if let Some(state) = block.state {
+		import_block.state_action = StateAction::ApplyChanges(crate::StorageChanges::Import(state));
+	} else if block.skip_execution {
+		import_block.state_action = StateAction::Skip;
+	} else if block.allow_missing_state {
+		import_block.state_action = StateAction::ExecuteIfPossible;
+	}
 
-	import_handler(import_handle.import_block(import_block.convert_transaction(), cache))
+	let imported = import_handle.import_block(import_block, cache).await;
+	if let Some(metrics) = metrics.as_ref() {
+		metrics.report_verification_and_import(started.elapsed());
+	}
+	import_handler(imported)
 }

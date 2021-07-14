@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +36,7 @@ use sp_runtime::{
 	traits,
 };
 use sp_core::{hexdisplay::HexDisplay, Bytes};
-use sp_transaction_pool::{TransactionPool, InPoolTransaction};
+use sc_transaction_pool_api::{TransactionPool, InPoolTransaction};
 use sp_block_builder::BlockBuilder;
 use sc_rpc_api::DenyUnsafe;
 
@@ -207,10 +207,7 @@ where
 		let call_data = account.encode();
 		let future_best_header = future_best_header
 			.and_then(move |maybe_best_header| ready(
-				match maybe_best_header {
-					Some(best_header) => Ok(best_header),
-					None => Err(ClientError::UnknownBlock(format!("{}", best_hash))),
-				}
+				maybe_best_header.ok_or_else(|| { ClientError::UnknownBlock(format!("{}", best_hash)) })
 			));
 		let future_nonce = future_best_header.and_then(move |best_header|
 			fetcher.remote_call(RemoteCallRequest {
@@ -301,6 +298,7 @@ mod tests {
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = BasicPool::new_full(
 			Default::default(),
+			true.into(),
 			None,
 			spawner,
 			client.clone(),
@@ -340,6 +338,7 @@ mod tests {
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = BasicPool::new_full(
 			Default::default(),
+			true.into(),
 			None,
 			spawner,
 			client.clone(),
@@ -363,6 +362,7 @@ mod tests {
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = BasicPool::new_full(
 			Default::default(),
+			true.into(),
 			None,
 			spawner,
 			client.clone(),
@@ -395,6 +395,7 @@ mod tests {
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = BasicPool::new_full(
 			Default::default(),
+			true.into(),
 			None,
 			spawner,
 			client.clone(),

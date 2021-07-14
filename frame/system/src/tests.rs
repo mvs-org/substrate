@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,8 +18,10 @@
 use crate::*;
 use mock::{*, Origin};
 use sp_core::H256;
-use sp_runtime::DispatchError;
-use frame_support::weights::WithPostDispatchInfo;
+use sp_runtime::{DispatchError, DispatchErrorWithPostInfo, traits::{Header, BlakeTwo256}};
+use frame_support::{
+	assert_noop, assert_ok, weights::WithPostDispatchInfo, dispatch::PostDispatchInfo
+};
 
 #[test]
 fn origin_works() {
@@ -31,21 +33,121 @@ fn origin_works() {
 #[test]
 fn stored_map_works() {
 	new_test_ext().execute_with(|| {
-		System::insert(&0, 42);
-		assert!(System::allow_death(&0));
+		assert_ok!(System::insert(&0, 42));
+		assert!(!System::is_provider_required(&0));
 
-		System::inc_ref(&0);
-		assert!(!System::allow_death(&0));
+		assert_eq!(Account::<Test>::get(0), AccountInfo {
+			nonce: 0,
+			providers: 1,
+			consumers: 0,
+			sufficients: 0,
+			data: 42,
+		});
 
-		System::insert(&0, 69);
-		assert!(!System::allow_death(&0));
+		assert_ok!(System::inc_consumers(&0));
+		assert!(System::is_provider_required(&0));
 
-		System::dec_ref(&0);
-		assert!(System::allow_death(&0));
+		assert_ok!(System::insert(&0, 69));
+		assert!(System::is_provider_required(&0));
+
+		System::dec_consumers(&0);
+		assert!(!System::is_provider_required(&0));
 
 		assert!(KILLED.with(|r| r.borrow().is_empty()));
-		System::kill_account(&0);
+		assert_ok!(System::remove(&0));
 		assert_eq!(KILLED.with(|r| r.borrow().clone()), vec![0u64]);
+	});
+}
+
+#[test]
+fn provider_ref_handover_to_self_sufficient_ref_works() {
+	new_test_ext().execute_with(|| {
+		assert_eq!(System::inc_providers(&0), IncRefStatus::Created);
+		System::inc_account_nonce(&0);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// a second reference coming and going doesn't change anything.
+		assert_eq!(System::inc_sufficients(&0), IncRefStatus::Existed);
+		assert_eq!(System::dec_sufficients(&0), DecRefStatus::Exists);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// a provider reference coming and going doesn't change anything.
+		assert_eq!(System::inc_providers(&0), IncRefStatus::Existed);
+		assert_eq!(System::dec_providers(&0).unwrap(), DecRefStatus::Exists);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// decreasing the providers with a self-sufficient present should not delete the account
+		assert_eq!(System::inc_sufficients(&0), IncRefStatus::Existed);
+		assert_eq!(System::dec_providers(&0).unwrap(), DecRefStatus::Exists);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// decreasing the sufficients should delete the account
+		assert_eq!(System::dec_sufficients(&0), DecRefStatus::Reaped);
+		assert_eq!(System::account_nonce(&0), 0);
+	});
+}
+
+#[test]
+fn self_sufficient_ref_handover_to_provider_ref_works() {
+	new_test_ext().execute_with(|| {
+		assert_eq!(System::inc_sufficients(&0), IncRefStatus::Created);
+		System::inc_account_nonce(&0);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// a second reference coming and going doesn't change anything.
+		assert_eq!(System::inc_providers(&0), IncRefStatus::Existed);
+		assert_eq!(System::dec_providers(&0).unwrap(), DecRefStatus::Exists);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// a sufficient reference coming and going doesn't change anything.
+		assert_eq!(System::inc_sufficients(&0), IncRefStatus::Existed);
+		assert_eq!(System::dec_sufficients(&0), DecRefStatus::Exists);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// decreasing the sufficients with a provider present should not delete the account
+		assert_eq!(System::inc_providers(&0), IncRefStatus::Existed);
+		assert_eq!(System::dec_sufficients(&0), DecRefStatus::Exists);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		// decreasing the providers should delete the account
+		assert_eq!(System::dec_providers(&0).unwrap(), DecRefStatus::Reaped);
+		assert_eq!(System::account_nonce(&0), 0);
+	});
+}
+
+#[test]
+fn sufficient_cannot_support_consumer() {
+	new_test_ext().execute_with(|| {
+		assert_eq!(System::inc_sufficients(&0), IncRefStatus::Created);
+		System::inc_account_nonce(&0);
+		assert_eq!(System::account_nonce(&0), 1);
+		assert_noop!(System::inc_consumers(&0), IncRefError::NoProviders);
+
+		assert_eq!(System::inc_providers(&0), IncRefStatus::Existed);
+		assert_ok!(System::inc_consumers(&0));
+		assert_noop!(System::dec_providers(&0), DecRefError::ConsumerRemaining);
+	});
+}
+
+#[test]
+fn provider_required_to_support_consumer() {
+	new_test_ext().execute_with(|| {
+		assert_noop!(System::inc_consumers(&0), IncRefError::NoProviders);
+
+		assert_eq!(System::inc_providers(&0), IncRefStatus::Created);
+		System::inc_account_nonce(&0);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		assert_eq!(System::inc_providers(&0), IncRefStatus::Existed);
+		assert_eq!(System::dec_providers(&0).unwrap(), DecRefStatus::Exists);
+		assert_eq!(System::account_nonce(&0), 1);
+
+		assert_ok!(System::inc_consumers(&0));
+		assert_noop!(System::dec_providers(&0), DecRefError::ConsumerRemaining);
+
+		System::dec_consumers(&0);
+		assert_eq!(System::dec_providers(&0).unwrap(), DecRefStatus::Reaped);
+		assert_eq!(System::account_nonce(&0), 0);
 	});
 }
 
@@ -54,7 +156,6 @@ fn deposit_event_should_work() {
 	new_test_ext().execute_with(|| {
 		System::initialize(
 			&1,
-			&[0u8; 32].into(),
 			&[0u8; 32].into(),
 			&Default::default(),
 			InitKind::Full,
@@ -67,7 +168,7 @@ fn deposit_event_should_work() {
 			vec![
 				EventRecord {
 					phase: Phase::Finalization,
-					event: SysEvent::CodeUpdated,
+					event: SysEvent::CodeUpdated.into(),
 					topics: vec![],
 				}
 			]
@@ -75,7 +176,6 @@ fn deposit_event_should_work() {
 
 		System::initialize(
 			&2,
-			&[0u8; 32].into(),
 			&[0u8; 32].into(),
 			&Default::default(),
 			InitKind::Full,
@@ -96,17 +196,17 @@ fn deposit_event_should_work() {
 			vec![
 				EventRecord {
 					phase: Phase::Initialization,
-					event: SysEvent::NewAccount(32),
+					event: SysEvent::NewAccount(32).into(),
 					topics: vec![],
 				},
 				EventRecord {
 					phase: Phase::ApplyExtrinsic(0),
-					event: SysEvent::KilledAccount(42),
+					event: SysEvent::KilledAccount(42).into(),
 					topics: vec![]
 				},
 				EventRecord {
 					phase: Phase::ApplyExtrinsic(0),
-					event: SysEvent::ExtrinsicSuccess(Default::default()),
+					event: SysEvent::ExtrinsicSuccess(Default::default()).into(),
 					topics: vec![]
 				},
 				EventRecord {
@@ -114,12 +214,12 @@ fn deposit_event_should_work() {
 					event: SysEvent::ExtrinsicFailed(
 						DispatchError::BadOrigin.into(),
 						Default::default()
-					),
+					).into(),
 					topics: vec![]
 				},
 				EventRecord {
 					phase: Phase::Finalization,
-					event: SysEvent::NewAccount(3),
+					event: SysEvent::NewAccount(3).into(),
 					topics: vec![]
 				},
 			]
@@ -132,7 +232,6 @@ fn deposit_event_uses_actual_weight() {
 	new_test_ext().execute_with(|| {
 		System::initialize(
 			&1,
-			&[0u8; 32].into(),
 			&[0u8; 32].into(),
 			&Default::default(),
 			InitKind::Full,
@@ -171,7 +270,7 @@ fn deposit_event_uses_actual_weight() {
 							weight: 300,
 							.. Default::default()
 						},
-					),
+					).into(),
 					topics: vec![]
 				},
 				EventRecord {
@@ -181,7 +280,7 @@ fn deposit_event_uses_actual_weight() {
 							weight: 1000,
 							.. Default::default()
 						},
-					),
+					).into(),
 					topics: vec![]
 				},
 				EventRecord {
@@ -191,7 +290,7 @@ fn deposit_event_uses_actual_weight() {
 							weight: 1000,
 							.. Default::default()
 						},
-					),
+					).into(),
 					topics: vec![]
 				},
 				EventRecord {
@@ -202,7 +301,7 @@ fn deposit_event_uses_actual_weight() {
 							weight: 999,
 							.. Default::default()
 						},
-					),
+					).into(),
 					topics: vec![]
 				},
 			]
@@ -218,7 +317,6 @@ fn deposit_event_topics() {
 		System::initialize(
 			&BLOCK_NUMBER,
 			&[0u8; 32].into(),
-			&[0u8; 32].into(),
 			&Default::default(),
 			InitKind::Full,
 		);
@@ -231,9 +329,9 @@ fn deposit_event_topics() {
 		];
 
 		// We deposit a few events with different sets of topics.
-		System::deposit_event_indexed(&topics[0..3], SysEvent::NewAccount(1));
-		System::deposit_event_indexed(&topics[0..1], SysEvent::NewAccount(2));
-		System::deposit_event_indexed(&topics[1..2], SysEvent::NewAccount(3));
+		System::deposit_event_indexed(&topics[0..3], SysEvent::NewAccount(1).into());
+		System::deposit_event_indexed(&topics[0..1], SysEvent::NewAccount(2).into());
+		System::deposit_event_indexed(&topics[1..2], SysEvent::NewAccount(3).into());
 
 		System::finalize();
 
@@ -243,17 +341,17 @@ fn deposit_event_topics() {
 			vec![
 				EventRecord {
 					phase: Phase::Finalization,
-					event: SysEvent::NewAccount(1),
+					event: SysEvent::NewAccount(1).into(),
 					topics: topics[0..3].to_vec(),
 				},
 				EventRecord {
 					phase: Phase::Finalization,
-					event: SysEvent::NewAccount(2),
+					event: SysEvent::NewAccount(2).into(),
 					topics: topics[0..1].to_vec(),
 				},
 				EventRecord {
 					phase: Phase::Finalization,
-					event: SysEvent::NewAccount(3),
+					event: SysEvent::NewAccount(3).into(),
 					topics: topics[1..2].to_vec(),
 				}
 			]
@@ -277,6 +375,17 @@ fn deposit_event_topics() {
 }
 
 #[test]
+fn event_util_functions_should_work() {
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		System::deposit_event(SysEvent::CodeUpdated);
+
+		System::assert_has_event(SysEvent::CodeUpdated.into());
+		System::assert_last_event(SysEvent::CodeUpdated.into());
+	});
+}
+
+#[test]
 fn prunes_block_hash_mappings() {
 	new_test_ext().execute_with(|| {
 		// simulate import of 15 blocks
@@ -284,7 +393,6 @@ fn prunes_block_hash_mappings() {
 			System::initialize(
 				&n,
 				&[n as u8 - 1; 32].into(),
-				&[0u8; 32].into(),
 				&Default::default(),
 				InitKind::Full,
 			);
@@ -312,17 +420,13 @@ fn prunes_block_hash_mappings() {
 
 #[test]
 fn set_code_checks_works() {
-	struct CallInWasm(Vec<u8>);
+	struct ReadRuntimeVersion(Vec<u8>);
 
-	impl sp_core::traits::CallInWasm for CallInWasm {
-		fn call_in_wasm(
+	impl sp_core::traits::ReadRuntimeVersion for ReadRuntimeVersion {
+		fn read_runtime_version(
 			&self,
-			_: &[u8],
-			_: Option<Vec<u8>>,
-			_: &str,
-			_: &[u8],
-			_: &mut dyn sp_externalities::Externalities,
-			_: sp_core::traits::MissingHostFunctions,
+			_wasm_code: &[u8],
+			_ext: &mut dyn sp_externalities::Externalities,
 		) -> Result<Vec<u8>, String> {
 			Ok(self.0.clone())
 		}
@@ -332,7 +436,7 @@ fn set_code_checks_works() {
 		("test", 1, 2, Err(Error::<Test>::SpecVersionNeedsToIncrease)),
 		("test", 1, 1, Err(Error::<Test>::SpecVersionNeedsToIncrease)),
 		("test2", 1, 1, Err(Error::<Test>::InvalidSpecName)),
-		("test", 2, 1, Ok(())),
+		("test", 2, 1, Ok(PostDispatchInfo::default())),
 		("test", 0, 1, Err(Error::<Test>::SpecVersionNeedsToIncrease)),
 		("test", 1, 0, Err(Error::<Test>::SpecVersionNeedsToIncrease)),
 	];
@@ -344,17 +448,17 @@ fn set_code_checks_works() {
 			impl_version,
 			..Default::default()
 		};
-		let call_in_wasm = CallInWasm(version.encode());
+		let read_runtime_version = ReadRuntimeVersion(version.encode());
 
 		let mut ext = new_test_ext();
-		ext.register_extension(sp_core::traits::CallInWasmExt::new(call_in_wasm));
+		ext.register_extension(sp_core::traits::ReadRuntimeVersionExt::new(read_runtime_version));
 		ext.execute_with(|| {
 			let res = System::set_code(
 				RawOrigin::Root.into(),
 				vec![1, 2, 3, 4],
 			);
 
-			assert_eq!(expected.map_err(DispatchError::from), res);
+			assert_eq!(expected.map_err(DispatchErrorWithPostInfo::from), res);
 		});
 	}
 }
@@ -363,7 +467,7 @@ fn set_code_checks_works() {
 fn set_code_with_real_wasm_blob() {
 	let executor = substrate_test_runtime_client::new_native_executor();
 	let mut ext = new_test_ext();
-	ext.register_extension(sp_core::traits::CallInWasmExt::new(executor));
+	ext.register_extension(sp_core::traits::ReadRuntimeVersionExt::new(executor));
 	ext.execute_with(|| {
 		System::set_block_number(1);
 		System::set_code(
@@ -375,7 +479,7 @@ fn set_code_with_real_wasm_blob() {
 			System::events(),
 			vec![EventRecord {
 				phase: Phase::Initialization,
-				event: SysEvent::CodeUpdated,
+				event: SysEvent::CodeUpdated.into(),
 				topics: vec![],
 			}],
 		);
@@ -386,7 +490,7 @@ fn set_code_with_real_wasm_blob() {
 fn runtime_upgraded_with_set_storage() {
 	let executor = substrate_test_runtime_client::new_native_executor();
 	let mut ext = new_test_ext();
-	ext.register_extension(sp_core::traits::CallInWasmExt::new(executor));
+	ext.register_extension(sp_core::traits::ReadRuntimeVersionExt::new(executor));
 	ext.execute_with(|| {
 		System::set_storage(
 			RawOrigin::Root.into(),
@@ -403,11 +507,12 @@ fn events_not_emitted_during_genesis() {
 	new_test_ext().execute_with(|| {
 		// Block Number is zero at genesis
 		assert!(System::block_number().is_zero());
-		System::on_created_account(Default::default());
+		let mut account_data = AccountInfo::default();
+		System::on_created_account(Default::default(), &mut account_data);
 		assert!(System::events().is_empty());
 		// Events will be emitted starting on block 1
 		System::set_block_number(1);
-		System::on_created_account(Default::default());
+		System::on_created_account(Default::default(), &mut account_data);
 		assert!(System::events().len() == 1);
 	});
 }
@@ -420,5 +525,30 @@ fn ensure_one_of_works() {
 
 	assert_eq!(ensure_root_or_signed(RawOrigin::Root).unwrap(), Either::Left(()));
 	assert_eq!(ensure_root_or_signed(RawOrigin::Signed(0)).unwrap(), Either::Right(0));
-	assert!(ensure_root_or_signed(RawOrigin::None).is_err())
+	assert!(ensure_root_or_signed(RawOrigin::None).is_err());
+}
+
+#[test]
+fn extrinsics_root_is_calculated_correctly() {
+	new_test_ext().execute_with(|| {
+		System::initialize(
+			&1,
+			&[0u8; 32].into(),
+			&Default::default(),
+			InitKind::Full,
+		);
+		System::note_finished_initialize();
+		System::note_extrinsic(vec![1]);
+		System::note_applied_extrinsic(&Ok(().into()), Default::default());
+		System::note_extrinsic(vec![2]);
+		System::note_applied_extrinsic(
+			&Err(DispatchError::BadOrigin.into()),
+			Default::default()
+		);
+		System::note_finished_extrinsics();
+		let header = System::finalize();
+
+		let ext_root = extrinsics_data_root::<BlakeTwo256>(vec![vec![1], vec![2]]);
+		assert_eq!(ext_root, *header.extrinsics_root());
+	});
 }

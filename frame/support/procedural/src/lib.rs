@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,13 +17,41 @@
 
 //! Proc macro of Support code for the runtime.
 
-#![recursion_limit="512"]
+#![recursion_limit = "512"]
 
 mod storage;
 mod construct_runtime;
+mod pallet;
+mod pallet_version;
 mod transactional;
+mod debug_no_bound;
+mod clone_no_bound;
+mod partial_eq_no_bound;
+mod default_no_bound;
+mod key_prefix;
+mod dummy_part_checker;
 
+pub(crate) use storage::INHERENT_INSTANCE_NAME;
 use proc_macro::TokenStream;
+use std::cell::RefCell;
+
+thread_local! {
+	/// A global counter, can be used to generate a relatively unique identifier.
+	static COUNTER: RefCell<Counter> = RefCell::new(Counter(0));
+}
+
+/// Counter to generate a relatively unique identifier for macros querying for the existence of
+/// pallet parts. This is necessary because declarative macros gets hoisted to the crate root,
+/// which shares the namespace with other pallets containing the very same query macros.
+struct Counter(u64);
+
+impl Counter {
+	fn inc(&mut self) -> u64 {
+		let ret = self.0;
+		self.0 += 1;
+		ret
+	}
+}
 
 /// Declares strongly-typed wrappers around codec-compatible types in storage.
 ///
@@ -31,7 +59,7 @@ use proc_macro::TokenStream;
 ///
 /// ```nocompile
 /// decl_storage! {
-/// 	trait Store for Module<T: Trait> as Example {
+/// 	trait Store for Module<T: Config> as Example {
 /// 		Foo get(fn foo) config(): u32=12;
 /// 		Bar: map hasher(identity) u32 => u32;
 /// 		pub Zed build(|config| vec![(0, 0)]): map hasher(identity) u32 => u32;
@@ -39,7 +67,7 @@ use proc_macro::TokenStream;
 /// }
 /// ```
 ///
-/// Declaration is set with the header `(pub) trait Store for Module<T: Trait> as Example`,
+/// Declaration is set with the header `(pub) trait Store for Module<T: Config> as Example`,
 /// with `Store` a (pub) trait generated associating each storage item to the `Module` and
 /// `as Example` setting the prefix used for storage items of this module. `Example` must be unique:
 /// another module with the same name and the same inner storage item name will conflict.
@@ -148,6 +176,9 @@ use proc_macro::TokenStream;
 /// * \[optional\] `config(#field_name)`: `field_name` is optional if get is set.
 /// Will include the item in `GenesisConfig`.
 /// * \[optional\] `build(#closure)`: Closure called with storage overlays.
+/// * \[optional\] `max_values(#expr)`: `expr` is an expression returning a `u32`. It is used to
+/// implement `StorageInfoTrait`. Note this attribute is not available for storage value as the maximum
+/// number of values is 1.
 /// * `#type`: Storage type.
 /// * \[optional\] `#default`: Value returned when none.
 ///
@@ -165,7 +196,7 @@ use proc_macro::TokenStream;
 ///
 /// ```nocompile
 /// decl_storage! {
-/// 	trait Store for Module<T: Trait> as Example {
+/// 	trait Store for Module<T: Config> as Example {
 ///
 /// 		// Your storage items
 /// 	}
@@ -186,7 +217,7 @@ use proc_macro::TokenStream;
 /// construct_runtime!(
 /// 	pub enum Runtime with ... {
 ///         ...,
-///         Example: example::{Module, Storage, ..., Config<T>},
+///         Example: example::{Pallet, Storage, ..., Config<T>},
 ///         ...,
 ///	}
 /// );
@@ -198,7 +229,7 @@ use proc_macro::TokenStream;
 /// (`DefaultInstance` type is optional):
 ///
 /// ```nocompile
-/// trait Store for Module<T: Trait<I>, I: Instance=DefaultInstance> as Example {}
+/// trait Store for Module<T: Config<I>, I: Instance=DefaultInstance> as Example {}
 /// ```
 ///
 /// Accessing the structure no requires the instance as generic parameter:
@@ -210,7 +241,7 @@ use proc_macro::TokenStream;
 /// This macro supports a where clause which will be replicated to all generated types.
 ///
 /// ```nocompile
-/// trait Store for Module<T: Trait> as Example where T::AccountId: std::fmt::Display {}
+/// trait Store for Module<T: Config> as Example where T::AccountId: std::fmt::Display {}
 /// ```
 ///
 /// ## Limitations
@@ -226,20 +257,29 @@ use proc_macro::TokenStream;
 /// add_extra_genesis {
 /// 	config(phantom): std::marker::PhantomData<I>,
 /// }
-/// ...
+/// ```
 ///
 /// This adds a field to your `GenesisConfig` with the name `phantom` that you can initialize with
 /// `Default::default()`.
 ///
+/// ## PoV information
+///
+/// To implement the trait `StorageInfoTrait` for storages an additional attribute can be used
+/// `generate_storage_info`:
+/// ```nocompile
+/// decl_storage! { generate_storage_info
+/// 	trait Store for ...
+/// }
+/// ```
 #[proc_macro]
 pub fn decl_storage(input: TokenStream) -> TokenStream {
 	storage::decl_storage_impl(input)
 }
 
-/// Construct a runtime, with the given name and the given modules.
+/// Construct a runtime, with the given name and the given pallets.
 ///
 /// The parameters here are specific types for `Block`, `NodeBlock`, and `UncheckedExtrinsic`
-/// and the modules that are used by the runtime.
+/// and the pallets that are used by the runtime.
 /// `Block` is the block type that is used in the runtime and `NodeBlock` is the block type
 /// that is used in the node. For instance they can differ in the extrinsics type.
 ///
@@ -252,53 +292,65 @@ pub fn decl_storage(input: TokenStream) -> TokenStream {
 ///         NodeBlock = runtime::Block,
 ///         UncheckedExtrinsic = UncheckedExtrinsic
 ///     {
-///         System: system::{Module, Call, Event<T>, Config<T>} = 0,
-///         Test: test::{Module, Call} = 1,
-///         Test2: test_with_long_module::{Module, Event<T>},
+///         System: system::{Pallet, Call, Event<T>, Config<T>} = 0,
+///         Test: test::{Pallet, Call} = 1,
+///         Test2: test_with_long_module::{Pallet, Event<T>},
 ///
-///         // Module with instances
-///         Test3_Instance1: test3::<Instance1>::{Module, Call, Storage, Event<T, I>, Config<T, I>, Origin<T, I>},
-///         Test3_DefaultInstance: test3::{Module, Call, Storage, Event<T>, Config<T>, Origin<T>} = 4,
+///         // Pallets with instances
+///         Test3_Instance1: test3::<Instance1>::{Pallet, Call, Storage, Event<T, I>, Config<T, I>, Origin<T, I>},
+///         Test3_DefaultInstance: test3::{Pallet, Call, Storage, Event<T>, Config<T>, Origin<T>} = 4,
 ///     }
 /// )
 /// ```
 ///
 /// The identifier `System` is the name of the pallet and the lower case identifier `system` is the
-/// name of the Rust module/crate for this Substrate module. The identifiers between the braces are
-/// the module parts provided by the pallet. It is important to list these parts here to export
+/// name of the Rust module/crate for this Substrate pallet. The identifiers between the braces are
+/// the pallet parts provided by the pallet. It is important to list these parts here to export
 /// them correctly in the metadata or to make the pallet usable in the runtime.
 ///
 /// We provide support for the following module parts in a pallet:
 ///
-/// - `Module`
-/// - `Call`
-/// - `Storage`
-/// - `Event` or `Event<T>` (if the event is generic)
-/// - `Origin` or `Origin<T>` (if the origin is generic)
-/// - `Config` or `Config<T>` (if the config is generic)
-/// - `Inherent` - If the module provides/can check inherents.
-/// - `ValidateUnsigned` - If the module validates unsigned extrinsics.
+/// - `Pallet` - Required for all pallets
+/// - `Call` - If the pallet has callable functions
+/// - `Storage` - If the pallet uses storage
+/// - `Event` or `Event<T>` (if the event is generic) - If the pallet emits events
+/// - `Origin` or `Origin<T>` (if the origin is generic) - If the pallet has instanciable origins
+/// - `Config` or `Config<T>` (if the config is generic) - If the pallet builds the genesis storage
+///   with `GenesisConfig`
+/// - `Inherent` - If the pallet provides/can check inherents.
+/// - `ValidateUnsigned` - If the pallet validates unsigned extrinsics.
 ///
-/// `= $n` is an optional part allowing to define at which index the module variants in
+/// `= $n` is an optional part allowing to define at which index the pallet variants in
 /// `OriginCaller`, `Call` and `Event` are encoded, and to define the ModuleToIndex value.
 ///
 /// if `= $n` is not given, then index is resolved same as fieldless enum in Rust
 /// (i.e. incrementedly from previous index):
 /// ```nocompile
-/// module1 .. = 2,
-/// module2 .., // Here module2 is given index 3
-/// module3 .. = 0,
-/// module4 .., // Here module4 is given index 1
+/// pallet1 .. = 2,
+/// pallet2 .., // Here pallet2 is given index 3
+/// pallet3 .. = 0,
+/// pallet4 .., // Here pallet4 is given index 1
 /// ```
 ///
 /// # Note
 ///
-/// The population of the genesis storage depends on the order of modules. So, if one of your
-/// modules depends on another module, the module that is depended upon needs to come before
-/// the module depending on it.
+/// The population of the genesis storage depends on the order of pallets. So, if one of your
+/// pallets depends on another pallet, the pallet that is depended upon needs to come before
+/// the pallet depending on it.
+///
+/// # Type definitions
+///
+/// * The macro generates a type alias for each pallet to their `Module` (or `Pallet`).
+///   E.g. `type System = frame_system::Pallet<Runtime>`
 #[proc_macro]
 pub fn construct_runtime(input: TokenStream) -> TokenStream {
 	construct_runtime::construct_runtime(input)
+}
+
+/// Macro to define a pallet. Docs are at `frame_support::pallet`.
+#[proc_macro_attribute]
+pub fn pallet(attr: TokenStream, item: TokenStream) -> TokenStream {
+	pallet::pallet(attr, item)
 }
 
 /// Execute the annotated function in a new storage transaction.
@@ -324,4 +376,106 @@ pub fn construct_runtime(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn transactional(attr: TokenStream, input: TokenStream) -> TokenStream {
 	transactional::transactional(attr, input).unwrap_or_else(|e| e.to_compile_error().into())
+}
+
+/// Derive [`Clone`] but do not bound any generic. Docs are at `frame_support::CloneNoBound`.
+#[proc_macro_derive(CloneNoBound)]
+pub fn derive_clone_no_bound(input: TokenStream) -> TokenStream {
+	clone_no_bound::derive_clone_no_bound(input)
+}
+
+/// Derive [`Debug`] but do not bound any generics. Docs are at `frame_support::DebugNoBound`.
+#[proc_macro_derive(DebugNoBound)]
+pub fn derive_debug_no_bound(input: TokenStream) -> TokenStream {
+	debug_no_bound::derive_debug_no_bound(input)
+}
+
+/// Derive [`Debug`], if `std` is enabled it uses `frame_support::DebugNoBound`, if `std` is not
+/// enabled it just returns `"<stripped>"`.
+/// This behaviour is useful to prevent bloating the runtime WASM blob from unneeded code.
+#[proc_macro_derive(RuntimeDebugNoBound)]
+pub fn derive_runtime_debug_no_bound(input: TokenStream) -> TokenStream {
+	#[cfg(not(feature = "std"))]
+	{
+		let input: syn::DeriveInput = match syn::parse(input) {
+			Ok(input) => input,
+			Err(e) => return e.to_compile_error().into(),
+		};
+
+		let name = &input.ident;
+		let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+		quote::quote!(
+			const _: () = {
+				impl #impl_generics core::fmt::Debug for #name #ty_generics #where_clause {
+					fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
+						fmt.write_str("<stripped>")
+					}
+				}
+			};
+		).into()
+	}
+
+	#[cfg(feature = "std")]
+	{
+		debug_no_bound::derive_debug_no_bound(input)
+	}
+}
+
+/// Derive [`PartialEq`] but do not bound any generic. Docs are at
+/// `frame_support::PartialEqNoBound`.
+#[proc_macro_derive(PartialEqNoBound)]
+pub fn derive_partial_eq_no_bound(input: TokenStream) -> TokenStream {
+	partial_eq_no_bound::derive_partial_eq_no_bound(input)
+}
+
+/// derive Eq but do no bound any generic. Docs are at `frame_support::EqNoBound`.
+#[proc_macro_derive(EqNoBound)]
+pub fn derive_eq_no_bound(input: TokenStream) -> TokenStream {
+	let input: syn::DeriveInput = match syn::parse(input) {
+		Ok(input) => input,
+		Err(e) => return e.to_compile_error().into(),
+	};
+
+	let name = &input.ident;
+	let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+	quote::quote_spanned!(name.span() =>
+		const _: () = {
+			impl #impl_generics core::cmp::Eq for #name #ty_generics #where_clause {}
+		};
+	).into()
+}
+
+/// derive `Default` but do no bound any generic. Docs are at `frame_support::DefaultNoBound`.
+#[proc_macro_derive(DefaultNoBound)]
+pub fn derive_default_no_bound(input: TokenStream) -> TokenStream {
+	default_no_bound::derive_default_no_bound(input)
+}
+
+#[proc_macro_attribute]
+pub fn require_transactional(attr: TokenStream, input: TokenStream) -> TokenStream {
+	transactional::require_transactional(attr, input).unwrap_or_else(|e| e.to_compile_error().into())
+}
+
+#[proc_macro]
+pub fn crate_to_pallet_version(input: TokenStream) -> TokenStream {
+	pallet_version::crate_to_pallet_version(input).unwrap_or_else(|e| e.to_compile_error()).into()
+}
+
+/// The number of module instances supported by the runtime, starting at index 1,
+/// and up to `NUMBER_OF_INSTANCE`.
+pub(crate) const NUMBER_OF_INSTANCE: u8 = 16;
+
+/// This macro is meant to be used by frame-support only.
+/// It implements the trait `HasKeyPrefix` and `HasReversibleKeyPrefix` for tuple of `Key`.
+#[proc_macro]
+pub fn impl_key_prefix_for_tuples(input: TokenStream) -> TokenStream {
+	key_prefix::impl_key_prefix_for_tuples(input).unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+/// Internal macro use by frame_support to generate dummy part checker for old pallet declaration
+#[proc_macro]
+pub fn __generate_dummy_part_checker(input: TokenStream) -> TokenStream {
+	dummy_part_checker::generate_dummy_part_checker(input)
 }

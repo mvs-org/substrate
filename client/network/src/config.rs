@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -21,9 +21,13 @@
 //! The [`Params`] struct is the struct that must be passed in order to initialize the networking.
 //! See the documentation of [`Params`].
 
-pub use crate::chain::{Client, FinalityProofProvider};
+pub use crate::chain::Client;
 pub use crate::on_demand_layer::{AlwaysBadChecker, OnDemand};
-pub use crate::request_responses::{IncomingRequest, ProtocolConfig as RequestResponseConfig};
+pub use crate::request_responses::{
+	IncomingRequest,
+	OutgoingResponse,
+	ProtocolConfig as RequestResponseConfig,
+};
 pub use libp2p::{identity, core::PublicKey, wasm_ext::ExtTransport, build_multiaddr};
 
 // Note: this re-export shouldn't be part of the public API of the crate and will be removed in
@@ -41,7 +45,7 @@ use libp2p::{
 };
 use prometheus_endpoint::Registry;
 use sp_consensus::{block_validation::BlockAnnounceValidator, import_queue::ImportQueue};
-use sp_runtime::{traits::Block as BlockT, ConsensusEngineId};
+use sp_runtime::traits::Block as BlockT;
 use std::{borrow::Cow, convert::TryFrom, future::Future, pin::Pin, str::FromStr};
 use std::{
 	collections::HashMap,
@@ -64,22 +68,14 @@ pub struct Params<B: BlockT, H: ExHashT> {
 	/// default.
 	pub executor: Option<Box<dyn Fn(Pin<Box<dyn Future<Output = ()> + Send>>) + Send>>,
 
+	/// How to spawn the background task dedicated to the transactions handler.
+	pub transactions_handler_executor: Box<dyn Fn(Pin<Box<dyn Future<Output = ()> + Send>>) + Send>,
+
 	/// Network layer configuration.
 	pub network_config: NetworkConfiguration,
 
 	/// Client that contains the blockchain.
 	pub chain: Arc<dyn Client<B>>,
-
-	/// Finality proof provider.
-	///
-	/// This object, if `Some`, is used when a node on the network requests a proof of finality
-	/// from us.
-	pub finality_proof_provider: Option<Arc<dyn FinalityProofProvider<B>>>,
-
-	/// How to build requests for proofs of finality.
-	///
-	/// This object, if `Some`, is used when we need a proof of finality from another node.
-	pub finality_proof_request_builder: Option<BoxFinalityProofRequestBuilder<B>>,
 
 	/// The `OnDemand` object acts as a "receiver" for block data requests from the client.
 	/// If `Some`, the network worker will process these requests and answer them.
@@ -106,6 +102,36 @@ pub struct Params<B: BlockT, H: ExHashT> {
 
 	/// Registry for recording prometheus metrics to.
 	pub metrics_registry: Option<Registry>,
+
+	/// Request response configuration for the block request protocol.
+	///
+	/// [`RequestResponseConfig::name`] is used to tag outgoing block requests with the correct
+	/// protocol name. In addition all of [`RequestResponseConfig`] is used to handle incoming block
+	/// requests, if enabled.
+	///
+	/// Can be constructed either via [`crate::block_request_handler::generate_protocol_config`]
+	/// allowing outgoing but not incoming requests, or constructed via
+	/// [`crate::block_request_handler::BlockRequestHandler::new`] allowing both outgoing and
+	/// incoming requests.
+	pub block_request_protocol_config: RequestResponseConfig,
+
+	/// Request response configuration for the light client request protocol.
+	///
+	/// Can be constructed either via
+	/// [`crate::light_client_requests::generate_protocol_config`] allowing outgoing but not
+	/// incoming requests, or constructed via
+	/// [`crate::light_client_requests::handler::LightClientRequestHandler::new`] allowing
+	/// both outgoing and incoming requests.
+	pub light_client_request_protocol_config: RequestResponseConfig,
+
+	/// Request response configuration for the state request protocol.
+	///
+	/// Can be constructed either via
+	/// [`crate::state_requests::generate_protocol_config`] allowing outgoing but not
+	/// incoming requests, or constructed via
+	/// [`crate::state_requests::handler::StateRequestHandler::new`] allowing
+	/// both outgoing and incoming requests.
+	pub state_request_protocol_config: RequestResponseConfig,
 }
 
 /// Role of the local node.
@@ -115,18 +141,8 @@ pub enum Role {
 	Full,
 	/// Regular light node.
 	Light,
-	/// Sentry node that guards an authority. Will be reported as "authority" on the wire protocol.
-	Sentry {
-		/// Address and identity of the validator nodes that we're guarding.
-		///
-		/// The nodes will be granted some priviledged status.
-		validators: Vec<MultiaddrWithPeerId>,
-	},
 	/// Actual authority.
-	Authority {
-		/// List of public addresses and identities of our sentry nodes.
-		sentry_nodes: Vec<MultiaddrWithPeerId>,
-	}
+	Authority,
 }
 
 impl Role {
@@ -135,10 +151,9 @@ impl Role {
 		matches!(self, Role::Authority { .. })
 	}
 
-	/// True for `Role::Authority` and `Role::Sentry` since they're both
-	/// announced as having the authority role to the network.
-	pub fn is_network_authority(&self) -> bool {
-		matches!(self, Role::Authority { .. } | Role::Sentry { .. })
+	/// True for `Role::Light`
+	pub fn is_light(&self) -> bool {
+		matches!(self, Role::Light { .. })
 	}
 }
 
@@ -147,30 +162,10 @@ impl fmt::Display for Role {
 		match self {
 			Role::Full => write!(f, "FULL"),
 			Role::Light => write!(f, "LIGHT"),
-			Role::Sentry { .. } => write!(f, "SENTRY"),
 			Role::Authority { .. } => write!(f, "AUTHORITY"),
 		}
 	}
 }
-
-/// Finality proof request builder.
-pub trait FinalityProofRequestBuilder<B: BlockT>: Send {
-	/// Build data blob, associated with the request.
-	fn build_request_data(&mut self, hash: &B::Hash) -> Vec<u8>;
-}
-
-/// Implementation of `FinalityProofRequestBuilder` that builds a dummy empty request.
-#[derive(Debug, Default)]
-pub struct DummyFinalityProofRequestBuilder;
-
-impl<B: BlockT> FinalityProofRequestBuilder<B> for DummyFinalityProofRequestBuilder {
-	fn build_request_data(&mut self, _: &B::Hash) -> Vec<u8> {
-		Vec::new()
-	}
-}
-
-/// Shared finality proof request builder struct used by the queue.
-pub type BoxFinalityProofRequestBuilder<B> = Box<dyn FinalityProofRequestBuilder<B> + Send + Sync>;
 
 /// Result of the transaction import.
 #[derive(Clone, Copy, Debug)]
@@ -185,7 +180,7 @@ pub enum TransactionImport {
 	None,
 }
 
-/// Fuure resolving to transaction import result.
+/// Future resolving to transaction import result.
 pub type TransactionImportFuture = Pin<Box<dyn Future<Output=TransactionImport> + Send>>;
 
 /// Transaction pool interface
@@ -387,6 +382,24 @@ impl From<multiaddr::Error> for ParseErr {
 	}
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Sync operation mode.
+pub enum SyncMode {
+	/// Full block download and verification.
+	Full,
+	/// Download blocks and the latest state.
+	Fast {
+		/// Skip state proof download and verification.
+		skip_proofs: bool
+	},
+}
+
+impl Default for SyncMode {
+	fn default() -> Self {
+		SyncMode::Full
+	}
+}
+
 /// Network service configuration.
 #[derive(Clone, Debug)]
 pub struct NetworkConfiguration {
@@ -400,19 +413,12 @@ pub struct NetworkConfiguration {
 	pub boot_nodes: Vec<MultiaddrWithPeerId>,
 	/// The node key configuration, which determines the node's network identity keypair.
 	pub node_key: NodeKeyConfig,
-	/// List of notifications protocols that the node supports. Must also include a
-	/// `ConsensusEngineId` for backwards-compatibility.
-	pub notifications_protocols: Vec<(ConsensusEngineId, Cow<'static, str>)>,
 	/// List of request-response protocols that the node supports.
 	pub request_response_protocols: Vec<RequestResponseConfig>,
-	/// Maximum allowed number of incoming connections.
-	pub in_peers: u32,
-	/// Number of outgoing connections we're trying to maintain.
-	pub out_peers: u32,
-	/// List of reserved node addresses.
-	pub reserved_nodes: Vec<MultiaddrWithPeerId>,
-	/// The non-reserved peer mode.
-	pub non_reserved_mode: NonReservedPeerMode,
+	/// Configuration for the default set of nodes used for block syncing and transactions.
+	pub default_peers_set: SetConfig,
+	/// Configuration for extra sets of nodes.
+	pub extra_sets: Vec<NonDefaultSetConfig>,
 	/// Client identifier. Sent over the wire for debugging purposes.
 	pub client_version: String,
 	/// Name of the node. Sent over the wire for debugging purposes.
@@ -421,8 +427,43 @@ pub struct NetworkConfiguration {
 	pub transport: TransportConfig,
 	/// Maximum number of peers to ask the same blocks in parallel.
 	pub max_parallel_downloads: u32,
+	/// Initial syncing mode.
+	pub sync_mode: SyncMode,
+
+	/// True if Kademlia random discovery should be enabled.
+	///
+	/// If true, the node will automatically randomly walk the DHT in order to find new peers.
+	pub enable_dht_random_walk: bool,
+
 	/// Should we insert non-global addresses into the DHT?
 	pub allow_non_globals_in_dht: bool,
+
+	/// Require iterative Kademlia DHT queries to use disjoint paths for increased resiliency in
+	/// the presence of potentially adversarial nodes.
+	pub kademlia_disjoint_query_paths: bool,
+	/// Enable serving block data over IPFS bitswap.
+	pub ipfs_server: bool,
+
+	/// Size of Yamux receive window of all substreams. `None` for the default (256kiB).
+	/// Any value less than 256kiB is invalid.
+	///
+	/// # Context
+	///
+	/// By design, notifications substreams on top of Yamux connections only allow up to `N` bytes
+	/// to be transferred at a time, where `N` is the Yamux receive window size configurable here.
+	/// This means, in practice, that every `N` bytes must be acknowledged by the receiver before
+	/// the sender can send more data. The maximum bandwidth of each notifications substream is
+	/// therefore `N / round_trip_time`.
+	///
+	/// It is recommended to leave this to `None`, and use a request-response protocol instead if
+	/// a large amount of data must be transferred. The reason why the value is configurable is
+	/// that some Substrate users mis-use notification protocols to send large amounts of data.
+	/// As such, this option isn't designed to stay and will likely get removed in the future.
+	///
+	/// Note that configuring a value here isn't a modification of the Yamux protocol, but rather
+	/// a modification of the way the implementation works. Different nodes with different
+	/// configured values remain compatible with each other.
+	pub yamux_window_size: Option<u32>,
 }
 
 impl NetworkConfiguration {
@@ -439,22 +480,23 @@ impl NetworkConfiguration {
 			public_addresses: Vec::new(),
 			boot_nodes: Vec::new(),
 			node_key,
-			notifications_protocols: Vec::new(),
 			request_response_protocols: Vec::new(),
-			in_peers: 25,
-			out_peers: 75,
-			reserved_nodes: Vec::new(),
-			non_reserved_mode: NonReservedPeerMode::Accept,
+			default_peers_set: Default::default(),
+			extra_sets: Vec::new(),
 			client_version: client_version.into(),
 			node_name: node_name.into(),
 			transport: TransportConfig::Normal {
 				enable_mdns: false,
 				allow_private_ipv4: true,
 				wasm_external_transport: None,
-				use_yamux_flow_control: false,
 			},
 			max_parallel_downloads: 5,
+			sync_mode: SyncMode::Full,
+			enable_dht_random_walk: true,
 			allow_non_globals_in_dht: false,
+			kademlia_disjoint_query_paths: false,
+			yamux_window_size: None,
+			ipfs_server: false,
 		}
 	}
 
@@ -497,6 +539,85 @@ impl NetworkConfiguration {
 	}
 }
 
+/// Configuration for a set of nodes.
+#[derive(Clone, Debug)]
+pub struct SetConfig {
+	/// Maximum allowed number of incoming substreams related to this set.
+	pub in_peers: u32,
+	/// Number of outgoing substreams related to this set that we're trying to maintain.
+	pub out_peers: u32,
+	/// List of reserved node addresses.
+	pub reserved_nodes: Vec<MultiaddrWithPeerId>,
+	/// Whether nodes that aren't in [`SetConfig::reserved_nodes`] are accepted or automatically
+	/// refused.
+	pub non_reserved_mode: NonReservedPeerMode,
+}
+
+impl Default for SetConfig {
+	fn default() -> Self {
+		SetConfig {
+			in_peers: 25,
+			out_peers: 75,
+			reserved_nodes: Vec::new(),
+			non_reserved_mode: NonReservedPeerMode::Accept,
+		}
+	}
+}
+
+/// Extension to [`SetConfig`] for sets that aren't the default set.
+///
+/// > **Note**: As new fields might be added in the future, please consider using the `new` method
+/// >			and modifiers instead of creating this struct manually.
+#[derive(Clone, Debug)]
+pub struct NonDefaultSetConfig {
+	/// Name of the notifications protocols of this set. A substream on this set will be
+	/// considered established once this protocol is open.
+	///
+	/// > **Note**: This field isn't present for the default set, as this is handled internally
+	/// >           by the networking code.
+	pub notifications_protocol: Cow<'static, str>,
+	/// If the remote reports that it doesn't support the protocol indicated in the
+	/// `notifications_protocol` field, then each of these fallback names will be tried one by
+	/// one.
+	///
+	/// If a fallback is used, it will be reported in
+	/// [`crate::Event::NotificationStreamOpened::negotiated_fallback`].
+	pub fallback_names: Vec<Cow<'static, str>>,
+	/// Maximum allowed size of single notifications.
+	pub max_notification_size: u64,
+	/// Base configuration.
+	pub set_config: SetConfig,
+}
+
+impl NonDefaultSetConfig {
+	/// Creates a new [`NonDefaultSetConfig`]. Zero slots and accepts only reserved nodes.
+	pub fn new(notifications_protocol: Cow<'static, str>, max_notification_size: u64) -> Self {
+		NonDefaultSetConfig {
+			notifications_protocol,
+			max_notification_size,
+			fallback_names: Vec::new(),
+			set_config: SetConfig {
+				in_peers: 0,
+				out_peers: 0,
+				reserved_nodes: Vec::new(),
+				non_reserved_mode: NonReservedPeerMode::Deny,
+			},
+		}
+	}
+
+	/// Modifies the configuration to allow non-reserved nodes.
+	pub fn allow_non_reserved(&mut self, in_peers: u32, out_peers: u32) {
+		self.set_config.in_peers = in_peers;
+		self.set_config.out_peers = out_peers;
+		self.set_config.non_reserved_mode = NonReservedPeerMode::Accept;
+	}
+
+	/// Add a node to the list of reserved nodes.
+	pub fn add_reserved(&mut self, peer: MultiaddrWithPeerId) {
+		self.set_config.reserved_nodes.push(peer);
+	}
+}
+
 /// Configuration for the transport layer.
 #[derive(Clone, Debug)]
 pub enum TransportConfig {
@@ -508,8 +629,7 @@ pub enum TransportConfig {
 
 		/// If true, allow connecting to private IPv4 addresses (as defined in
 		/// [RFC1918](https://tools.ietf.org/html/rfc1918)). Irrelevant for addresses that have
-		/// been passed in [`NetworkConfiguration::reserved_nodes`] or
-		/// [`NetworkConfiguration::boot_nodes`].
+		/// been passed in [`NetworkConfiguration::boot_nodes`].
 		allow_private_ipv4: bool,
 
 		/// Optional external implementation of a libp2p transport. Used in WASM contexts where we
@@ -519,8 +639,6 @@ pub enum TransportConfig {
 		/// This parameter exists whatever the target platform is, but it is expected to be set to
 		/// `Some` only when compiling for WASM.
 		wasm_external_transport: Option<wasm_ext::ExtTransport>,
-		/// Use flow control for yamux streams if set to true.
-		use_yamux_flow_control: bool,
 	},
 
 	/// Only allow connections within the same process.

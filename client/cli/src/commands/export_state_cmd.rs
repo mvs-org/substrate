@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ use sc_client_api::{StorageProvider, UsageProvider};
 
 /// The `export-state` command used to export the state of a given block into
 /// a chain spec.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Clone)]
 pub struct ExportStateCmd {
 	/// Block hash or number.
 	#[structopt(value_name = "HASH or NUMBER")]

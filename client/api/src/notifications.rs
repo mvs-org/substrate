@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -51,19 +51,18 @@ impl StorageChangeSet {
 			.map(move |(k,v)| (None, k, v.as_ref()));
 		let children = self.child_changes
 			.iter()
-			.filter_map(move |(sk, changes)| {
-				if let Some(cf) = self.child_filters.as_ref() {
-					if let Some(filter) = cf.get(sk) {
-						Some(changes
+			.filter_map(move |(sk, changes)| 
+				self.child_filters.as_ref().and_then(|cf|
+					cf.get(sk).map(|filter| changes
 							.iter()
 							.filter(move |&(key, _)| match filter {
 								Some(ref filter) => filter.contains(key),
 								None => true,
 							})
-							.map(move |(k,v)| (Some(sk), k, v.as_ref())))
-					} else { None }
-				} else { None	}
-			})
+							.map(move |(k,v)| (Some(sk), k, v.as_ref()))
+					)
+				)
+			)
 			.flatten();
 		top.chain(children)
 	}

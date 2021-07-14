@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -75,7 +75,7 @@ impl GenericNumber {
 }
 
 /// Wrapper type that is either a `Hash` or the number of a `Block`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockNumberOrHash(String);
 
 impl FromStr for BlockNumberOrHash {
@@ -119,7 +119,7 @@ impl BlockNumberOrHash {
 
 
 /// Optional flag for specifying crypto algorithm
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Clone)]
 pub struct CryptoSchemeFlag {
 	/// cryptography scheme
 	#[structopt(
@@ -133,7 +133,7 @@ pub struct CryptoSchemeFlag {
 }
 
 /// Optional flag for specifying output type
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Clone)]
 pub struct OutputTypeFlag {
 	/// output format
 	#[structopt(
@@ -147,7 +147,7 @@ pub struct OutputTypeFlag {
 }
 
 /// Optional flag for specifying network scheme
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Clone)]
 pub struct NetworkSchemeFlag {
 	/// network address format
 	#[structopt(

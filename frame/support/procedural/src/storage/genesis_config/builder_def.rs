@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -117,6 +117,21 @@ impl BuilderDef {
 								<#storage_struct as #scrate::#storage_trait>::insert::<
 									&#key1, &#key2, &#value_type
 								>(k1, k2, v);
+							});
+						}}
+					},
+					StorageLineTypeDef::NMap(map) => {
+						let key_tuple = map.to_key_tuple();
+						let key_arg = if map.keys.len() == 1 {
+							quote!((k,))
+						} else {
+							quote!(k)
+						};
+						quote!{{
+							#data
+							let data: &#scrate::sp_std::vec::Vec<(#key_tuple, #value_type)> = data;
+							data.iter().for_each(|(k, v)| {
+								<#storage_struct as #scrate::#storage_trait>::insert(#key_arg, v);
 							});
 						}}
 					},

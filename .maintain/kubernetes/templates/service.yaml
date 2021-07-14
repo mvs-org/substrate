@@ -8,9 +8,9 @@ metadata:
   name: {{ .Values.app }}-rpc
 spec:
   ports:
-  - port: 9933
+  - port: 8830
     name: http-rpc
-  - port: 9944
+  - port: 8831
     name: websocket-rpc
   selector:
     app: {{ .Values.GitlabEnvSlug | default .Values.app }}

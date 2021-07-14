@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -84,7 +84,7 @@ trait ChainBackend<Client, Block: BlockT>: Send + Sync + 'static
 				// FIXME <2329>: Database seems to limit the block number to u32 for no reason
 				let block_num: u32 = num_or_hex.try_into().map_err(|_| {
 					Error::from(format!(
-						"`{:?}` > u32::max_value(), the max block number is u32.",
+						"`{:?}` > u32::MAX, the max block number is u32.",
 						num_or_hex
 					))
 				})?;

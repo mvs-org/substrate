@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -32,6 +32,7 @@ use substrate_test_runtime_client::{
 	sp_consensus::BlockOrigin,
 	runtime,
 };
+use sc_rpc_api::DenyUnsafe;
 use sp_runtime::generic::BlockId;
 use crate::testing::TaskExecutor;
 use futures::{executor, compat::Future01CompatExt};
@@ -58,7 +59,12 @@ fn should_return_storage() {
 		.add_extra_storage(b":map:acc2".to_vec(), vec![1, 2, 3])
 		.build();
 	let genesis_hash = client.genesis_hash();
-	let (client, child) = new_full(Arc::new(client), SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let (client, child) = new_full(
+		Arc::new(client),
+		SubscriptionManager::new(Arc::new(TaskExecutor)),
+		DenyUnsafe::No,
+		None,
+	);
 	let key = StorageKey(KEY.to_vec());
 
 	assert_eq!(
@@ -96,7 +102,12 @@ fn should_return_child_storage() {
 		.add_child_storage(&child_info, "key", vec![42_u8])
 		.build());
 	let genesis_hash = client.genesis_hash();
-	let (_client, child) = new_full(client, SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let (_client, child) = new_full(
+		client,
+		SubscriptionManager::new(Arc::new(TaskExecutor)),
+		DenyUnsafe::No,
+		None,
+	);
 	let child_key = prefixed_storage_key();
 	let key = StorageKey(b"key".to_vec());
 
@@ -131,7 +142,12 @@ fn should_return_child_storage() {
 fn should_call_contract() {
 	let client = Arc::new(substrate_test_runtime_client::new());
 	let genesis_hash = client.genesis_hash();
-	let (client, _child) = new_full(client, SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let (client, _child) = new_full(
+		client,
+		SubscriptionManager::new(Arc::new(TaskExecutor)),
+		DenyUnsafe::No,
+		None,
+	);
 
 	assert_matches!(
 		client.call("balanceOf".into(), Bytes(vec![1,2,3]), Some(genesis_hash).into()).wait(),
@@ -145,7 +161,12 @@ fn should_notify_about_storage_changes() {
 
 	{
 		let mut client = Arc::new(substrate_test_runtime_client::new());
-		let (api, _child) = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+		let (api, _child) = new_full(
+			client.clone(),
+			SubscriptionManager::new(Arc::new(TaskExecutor)),
+			DenyUnsafe::No,
+			None,
+		);
 
 		api.subscribe_storage(Default::default(), subscriber, None.into());
 
@@ -163,7 +184,7 @@ fn should_notify_about_storage_changes() {
 			nonce: 0,
 		}).unwrap();
 		let block = builder.build().unwrap().block;
-		client.import(BlockOrigin::Own, block).unwrap();
+		executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
 	}
 
 	// assert notification sent to transport
@@ -179,7 +200,12 @@ fn should_send_initial_storage_changes_and_notifications() {
 
 	{
 		let mut client = Arc::new(substrate_test_runtime_client::new());
-		let (api, _child) = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+		let (api, _child) = new_full(
+			client.clone(),
+			SubscriptionManager::new(Arc::new(TaskExecutor)),
+			DenyUnsafe::No,
+			None,
+		);
 
 		let alice_balance_key = blake2_256(&runtime::system::balance_of_key(AccountKeyring::Alice.into()));
 
@@ -201,7 +227,7 @@ fn should_send_initial_storage_changes_and_notifications() {
 			nonce: 0,
 		}).unwrap();
 		let block = builder.build().unwrap().block;
-		client.import(BlockOrigin::Own, block).unwrap();
+		executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
 	}
 
 	// assert initial values sent to transport
@@ -217,7 +243,12 @@ fn should_send_initial_storage_changes_and_notifications() {
 #[test]
 fn should_query_storage() {
 	fn run_tests(mut client: Arc<TestClient>, has_changes_trie_config: bool) {
-		let (api, _child) = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+		let (api, _child) = new_full(
+			client.clone(),
+			SubscriptionManager::new(Arc::new(TaskExecutor)),
+			DenyUnsafe::No,
+			None,
+		);
 
 		let mut add_block = |nonce| {
 			let mut builder = client.new_block(Default::default()).unwrap();
@@ -233,7 +264,7 @@ fn should_query_storage() {
 			builder.push_storage_change(vec![5], Some(vec![nonce as u8])).unwrap();
 			let block = builder.build().unwrap().block;
 			let hash = block.header.hash();
-			client.import(BlockOrigin::Own, block).unwrap();
+			executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
 			hash
 		};
 		let block1_hash = add_block(0);
@@ -434,11 +465,16 @@ fn should_split_ranges() {
 #[test]
 fn should_return_runtime_version() {
 	let client = Arc::new(substrate_test_runtime_client::new());
-	let (api, _child) = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+	let (api, _child) = new_full(
+		client.clone(),
+		SubscriptionManager::new(Arc::new(TaskExecutor)),
+		DenyUnsafe::No,
+		None,
+	);
 
 	let result = "{\"specName\":\"test\",\"implName\":\"parity-test\",\"authoringVersion\":1,\
 		\"specVersion\":2,\"implVersion\":2,\"apis\":[[\"0xdf6acb689907609b\",3],\
-		[\"0x37e397fc7c91f5e4\",1],[\"0xd2bc9897eed08f15\",2],[\"0x40fe3ad401f8959a\",4],\
+		[\"0x37e397fc7c91f5e4\",1],[\"0xd2bc9897eed08f15\",3],[\"0x40fe3ad401f8959a\",5],\
 		[\"0xc6e9a76309f39b09\",1],[\"0xdd718d5cc53262d4\",1],[\"0xcbca25e39f142387\",2],\
 		[\"0xf78b278be53f454c\",2],[\"0xab3c0572291feb8b\",1],[\"0xbc9d89904f5b923f\",1]],\
 		\"transactionVersion\":1}";
@@ -457,7 +493,12 @@ fn should_notify_on_runtime_version_initially() {
 
 	{
 		let client = Arc::new(substrate_test_runtime_client::new());
-		let (api, _child) = new_full(client.clone(), SubscriptionManager::new(Arc::new(TaskExecutor)));
+		let (api, _child) = new_full(
+			client.clone(),
+			SubscriptionManager::new(Arc::new(TaskExecutor)),
+			DenyUnsafe::No,
+			None,
+		);
 
 		api.subscribe_runtime_version(Default::default(), subscriber);
 

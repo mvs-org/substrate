@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,8 +39,8 @@ mod tests {
 					($name::from(16), "0x10"),
 					($name::from(1_000), "0x3e8"),
 					($name::from(100_000), "0x186a0"),
-					($name::from(u64::max_value()), "0xffffffffffffffff"),
-					($name::from(u64::max_value()) + $name::from(1), "0x10000000000000000"),
+					($name::from(u64::MAX), "0xffffffffffffffff"),
+					($name::from(u64::MAX) + $name::from(1), "0x10000000000000000"),
 				];
 
 				for (number, expected) in tests {

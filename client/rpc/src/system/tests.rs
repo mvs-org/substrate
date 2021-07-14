@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ use substrate_test_runtime_client::runtime::Block;
 use assert_matches::assert_matches;
 use futures::prelude::*;
 use sp_utils::mpsc::tracing_unbounded;
-use std::thread;
+use std::{process::{Stdio, Command}, env, io::{BufReader, BufRead, Write}, thread};
 
 struct Status {
 	pub peers: usize,
@@ -101,8 +101,18 @@ fn api<T: Into<Option<Status>>>(sync: T) -> System<Block> {
 						Err(s) => sender.send(Err(error::Error::MalformattedPeerArg(s.to_string()))),
 					};
 				}
+				Request::NetworkReservedPeers(sender) => {
+					let _ = sender.send(vec!["QmSk5HQbn6LhUwDiNMseVUjuRYhEtYj4aUZ6WfWoGURpdV".to_string()]);
+				}
 				Request::NodeRoles(sender) => {
 					let _ = sender.send(vec![NodeRole::Authority]);
+				}
+				Request::SyncState(sender) => {
+					let _ = sender.send(SyncState {
+						starting_block: 1,
+						current_block: 2,
+						highest_block: Some(3),
+					});
 				}
 			};
 
@@ -292,6 +302,18 @@ fn system_node_roles() {
 }
 
 #[test]
+fn system_sync_state() {
+	assert_eq!(
+		wait_receiver(api(None).system_sync_state()),
+		SyncState {
+			starting_block: 1,
+			current_block: 2,
+			highest_block: Some(3),
+		}
+	);
+}
+
+#[test]
 fn system_network_add_reserved() {
 	let good_peer_id = "/ip4/198.51.100.19/tcp/30333/p2p/QmSk5HQbn6LhUwDiNMseVUjuRYhEtYj4aUZ6WfWoGURpdV";
 	let bad_peer_id = "/ip4/198.51.100.19/tcp/30333";
@@ -313,4 +335,87 @@ fn system_network_remove_reserved() {
 	let bad_fut = api(None).system_remove_reserved_peer(bad_peer_id.into());
 	assert_eq!(runtime.block_on(good_fut), Ok(()));
 	assert!(runtime.block_on(bad_fut).is_err());
+}
+
+#[test]
+fn system_network_reserved_peers() {
+	assert_eq!(
+		wait_receiver(api(None).system_reserved_peers()),
+		vec!["QmSk5HQbn6LhUwDiNMseVUjuRYhEtYj4aUZ6WfWoGURpdV".to_string()]
+	);
+}
+
+#[test]
+fn test_add_reset_log_filter() {
+	const EXPECTED_BEFORE_ADD: &'static str = "EXPECTED_BEFORE_ADD";
+	const EXPECTED_AFTER_ADD: &'static str = "EXPECTED_AFTER_ADD";
+	const EXPECTED_WITH_TRACE: &'static str = "EXPECTED_WITH_TRACE";
+
+	// Enter log generation / filter reload
+	if std::env::var("TEST_LOG_FILTER").is_ok() {
+		sc_tracing::logging::LoggerBuilder::new("test_before_add=debug").init().unwrap();
+		for line in std::io::stdin().lock().lines() {
+			let line = line.expect("Failed to read bytes");
+			if line.contains("add_reload") {
+				api(None).system_add_log_filter("test_after_add".into())
+					.expect("`system_add_log_filter` failed");
+			} else if line.contains("add_trace") {
+				api(None).system_add_log_filter("test_before_add=trace".into())
+					.expect("`system_add_log_filter` failed");
+			} else if line.contains("reset") {
+				api(None).system_reset_log_filter().expect("`system_reset_log_filter` failed");
+			} else if line.contains("exit") {
+				return;
+			}
+			log::trace!(target: "test_before_add", "{}", EXPECTED_WITH_TRACE);
+			log::debug!(target: "test_before_add", "{}", EXPECTED_BEFORE_ADD);
+			log::debug!(target: "test_after_add", "{}", EXPECTED_AFTER_ADD);
+		}
+	}
+
+	// Call this test again to enter the log generation / filter reload block
+	let test_executable = env::current_exe().expect("Unable to get current executable!");
+	let mut child_process = Command::new(test_executable)
+		.env("TEST_LOG_FILTER", "1")
+		.args(&["--nocapture", "test_add_reset_log_filter"])
+		.stdin(Stdio::piped())
+		.stderr(Stdio::piped())
+		.spawn()
+		.unwrap();
+
+	let child_stderr = child_process.stderr.take().expect("Could not get child stderr");
+	let mut child_out = BufReader::new(child_stderr);
+	let mut child_in = child_process.stdin.take().expect("Could not get child stdin");
+
+	let mut read_line = || {
+		let mut line = String::new();
+		child_out.read_line(&mut line).expect("Reading a line");
+		line
+	};
+
+	// Initiate logs loop in child process
+	child_in.write(b"\n").unwrap();
+	assert!(read_line().contains(EXPECTED_BEFORE_ADD));
+
+	// Initiate add directive & reload in child process
+	child_in.write(b"add_reload\n").unwrap();
+	assert!(read_line().contains(EXPECTED_BEFORE_ADD));
+	assert!(read_line().contains(EXPECTED_AFTER_ADD));
+
+	// Check that increasing the max log level works
+	child_in.write(b"add_trace\n").unwrap();
+	assert!(read_line().contains(EXPECTED_WITH_TRACE));
+	assert!(read_line().contains(EXPECTED_BEFORE_ADD));
+	assert!(read_line().contains(EXPECTED_AFTER_ADD));
+
+	// Initiate logs filter reset in child process
+	child_in.write(b"reset\n").unwrap();
+	assert!(read_line().contains(EXPECTED_BEFORE_ADD));
+
+	// Return from child process
+	child_in.write(b"exit\n").unwrap();
+	assert!(child_process.wait().expect("Error waiting for child process").success());
+
+	// Check for EOF
+	assert_eq!(child_out.read_line(&mut String::new()).unwrap(), 0);
 }

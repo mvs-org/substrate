@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -21,12 +21,12 @@
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use sp_core::ChangesTrieConfigurationRange;
-use sp_core::offchain::{OffchainStorage,storage::OffchainOverlayedChanges};
-use sp_runtime::{generic::BlockId, Justification, Storage};
+use sp_core::offchain::OffchainStorage;
+use sp_runtime::{generic::BlockId, Justification, Justifications, Storage};
 use sp_runtime::traits::{Block as BlockT, NumberFor, HashFor};
 use sp_state_machine::{
 	ChangesTrieState, ChangesTrieStorage as StateChangesTrieStorage, ChangesTrieTransaction,
-	StorageCollection, ChildStorageCollection,
+	StorageCollection, ChildStorageCollection, OffchainChangesCollection, IndexOperation,
 };
 use sp_storage::{StorageData, StorageKey, PrefixedStorageKey, ChildInfo};
 use crate::{
@@ -41,6 +41,7 @@ use sp_consensus::BlockOrigin;
 use parking_lot::RwLock;
 
 pub use sp_state_machine::Backend as StateBackend;
+pub use sp_consensus::ImportedState;
 use std::marker::PhantomData;
 
 /// Extracts the state backend type for the given backend.
@@ -148,7 +149,7 @@ pub trait BlockImportOperation<Block: BlockT> {
 		&mut self,
 		header: Block::Header,
 		body: Option<Vec<Block::Extrinsic>>,
-		justification: Option<Justification>,
+		justifications: Option<Justifications>,
 		state: NewBlockState,
 	) -> sp_blockchain::Result<()>;
 
@@ -160,6 +161,10 @@ pub trait BlockImportOperation<Block: BlockT> {
 		&mut self,
 		update: TransactionForSB<Self::State, Block>,
 	) -> sp_blockchain::Result<()>;
+
+	/// Set genesis state. If `commit` is `false` the state is saved in memory, but is not written
+	/// to the database.
+	fn set_genesis_state(&mut self, storage: Storage, commit: bool) -> sp_blockchain::Result<Block::Hash>;
 
 	/// Inject storage data into the database replacing any existing data.
 	fn reset_storage(&mut self, storage: Storage) -> sp_blockchain::Result<Block::Hash>;
@@ -174,7 +179,7 @@ pub trait BlockImportOperation<Block: BlockT> {
 	/// Write offchain storage changes to the database.
 	fn update_offchain_storage(
 		&mut self,
-		_offchain_update: OffchainOverlayedChanges,
+		_offchain_update: OffchainChangesCollection,
 	) -> sp_blockchain::Result<()> {
 		 Ok(())
 	}
@@ -197,9 +202,13 @@ pub trait BlockImportOperation<Block: BlockT> {
 		id: BlockId<Block>,
 		justification: Option<Justification>,
 	) -> sp_blockchain::Result<()>;
+
 	/// Mark a block as new head. If both block import and set head are specified, set head
 	/// overrides block import's best block rule.
 	fn mark_head(&mut self, id: BlockId<Block>) -> sp_blockchain::Result<()>;
+
+	/// Add a transaction index operation.
+	fn update_transaction_index(&mut self, index: Vec<IndexOperation>) -> sp_blockchain::Result<()>;
 }
 
 /// Interface for performing operations on the backend.
@@ -230,7 +239,6 @@ pub trait Finalizer<Block: BlockT, B: Backend<Block>> {
 		notify: bool,
 	) -> sp_blockchain::Result<()>;
 
-
 	/// Finalize a block.
 	///
 	/// This will implicitly finalize all blocks up to it and
@@ -250,7 +258,6 @@ pub trait Finalizer<Block: BlockT, B: Backend<Block>> {
 		justification: Option<Justification>,
 		notify: bool,
 	) -> sp_blockchain::Result<()>;
-
 }
 
 /// Provides access to an auxiliary database.
@@ -273,6 +280,7 @@ pub trait AuxStore {
 /// An `Iterator` that iterates keys in a given block under a prefix.
 pub struct KeyIterator<'a, State, Block> {
 	state: State,
+	child_storage: Option<ChildInfo>,
 	prefix: Option<&'a StorageKey>,
 	current_key: Vec<u8>,
 	_phantom: PhantomData<Block>,
@@ -283,6 +291,23 @@ impl <'a, State, Block> KeyIterator<'a, State, Block> {
 	pub fn new(state: State, prefix: Option<&'a StorageKey>, current_key: Vec<u8>) -> Self {
 		Self {
 			state,
+			child_storage: None,
+			prefix,
+			current_key,
+			_phantom: PhantomData,
+		}
+	}
+
+	/// Create a `KeyIterator` instance for a child storage.
+	pub fn new_child(
+		state: State,
+		child_info: ChildInfo,
+		prefix: Option<&'a StorageKey>,
+		current_key: Vec<u8>,
+	) -> Self {
+		Self {
+			state,
+			child_storage: Some(child_info),
 			prefix,
 			current_key,
 			_phantom: PhantomData,
@@ -297,10 +322,11 @@ impl<'a, State, Block> Iterator for KeyIterator<'a, State, Block> where
 	type Item = StorageKey;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		let next_key = self.state
-			.next_storage_key(&self.current_key)
-			.ok()
-			.flatten()?;
+		let next_key = if let Some(child_info) = self.child_storage.as_ref() {
+			self.state.next_child_storage_key(child_info, &self.current_key)
+		} else {
+			self.state.next_storage_key(&self.current_key)
+		}.ok().flatten()?;
 		// this terminates the iterator the first time it fails.
 		if let Some(prefix) = self.prefix {
 			if !next_key.starts_with(&prefix.0[..]) {
@@ -353,6 +379,16 @@ pub trait StorageProvider<Block: BlockT, B: Backend<Block>> {
 		child_info: &ChildInfo,
 		key_prefix: &StorageKey
 	) -> sp_blockchain::Result<Vec<StorageKey>>;
+
+	/// Given a `BlockId` and a key `prefix` and a child storage key,
+	/// return a `KeyIterator` that iterates matching storage keys in that block.
+	fn child_storage_keys_iter<'a>(
+		&self,
+		id: &BlockId<Block>,
+		child_info: ChildInfo,
+		prefix: Option<&'a StorageKey>,
+		start_key: Option<&StorageKey>
+	) -> sp_blockchain::Result<KeyIterator<'a, B::State, Block>>;
 
 	/// Given a `BlockId`, a key and a child storage key, return the hash under the key in that block.
 	fn child_storage_hash(
@@ -432,6 +468,15 @@ pub trait Backend<Block: BlockT>: AuxStore + Send + Sync {
 		justification: Option<Justification>,
 	) -> sp_blockchain::Result<()>;
 
+	/// Append justification to the block with the given Id.
+	///
+	/// This should only be called for blocks that are already finalized.
+	fn append_justification(
+		&self,
+		block: BlockId<Block>,
+		justification: Justification,
+	) -> sp_blockchain::Result<()>;
+
 	/// Returns reference to blockchain backend.
 	fn blockchain(&self) -> &Self::Blockchain;
 
@@ -463,6 +508,12 @@ pub trait Backend<Block: BlockT>: AuxStore + Send + Sync {
 		n: NumberFor<Block>,
 		revert_finalized: bool,
 	) -> sp_blockchain::Result<(NumberFor<Block>, HashSet<Block::Hash>)>;
+
+	/// Discard non-best, unfinalized leaf block.
+	fn remove_leaf_block(
+		&self,
+		hash: &Block::Hash,
+	) -> sp_blockchain::Result<()>;
 
 	/// Insert auxiliary data into key-value store.
 	fn insert_aux<

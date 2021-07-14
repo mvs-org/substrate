@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,15 +22,15 @@
 use super::*;
 use frame_support::{
 	parameter_types,
-	weights::{Weight, constants::WEIGHT_PER_SECOND},
+	weights::constants::WEIGHT_PER_SECOND,
 };
 use frame_system as system;
 use sp_runtime::{
-	SaturatedConversion,
-	traits::{IdentityLookup, Block as BlockT},
+	traits::IdentityLookup,
 	testing::{Header, UintAuthorityId},
 };
-
+use frame_election_provider_support::onchain;
+use pallet_session::historical as pallet_session_historical;
 
 type AccountId = u64;
 type AccountIndex = u32;
@@ -38,11 +38,15 @@ type BlockNumber = u64;
 type Balance = u64;
 
 parameter_types! {
-	pub const MaximumBlockWeight: Weight = 2 * WEIGHT_PER_SECOND;
+	pub BlockWeights: frame_system::limits::BlockWeights =
+		frame_system::limits::BlockWeights::simple_max(2 * WEIGHT_PER_SECOND);
 }
 
-impl frame_system::Trait for Test {
-	type BaseCallFilter = ();
+impl frame_system::Config for Test {
+	type BaseCallFilter = frame_support::traits::AllowAll;
+	type BlockWeights = ();
+	type BlockLength = ();
+	type DbWeight = ();
 	type Origin = Origin;
 	type Index = AccountIndex;
 	type BlockNumber = BlockNumber;
@@ -54,25 +58,22 @@ impl frame_system::Trait for Test {
 	type Header = sp_runtime::testing::Header;
 	type Event = Event;
 	type BlockHashCount = ();
-	type MaximumBlockWeight = MaximumBlockWeight;
-	type DbWeight = ();
-	type AvailableBlockRatio = ();
-	type MaximumBlockLength = ();
 	type Version = ();
-	type PalletInfo = ();
+	type PalletInfo = PalletInfo;
 	type AccountData = pallet_balances::AccountData<u64>;
 	type OnNewAccount = ();
-	type OnKilledAccount = (Balances,);
-	type BlockExecutionWeight = ();
-	type ExtrinsicBaseWeight = ();
-	type MaximumExtrinsicWeight = ();
+	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
+	type SS58Prefix = ();
+	type OnSetCode = ();
 }
 parameter_types! {
 	pub const ExistentialDeposit: Balance = 10;
 }
-impl pallet_balances::Trait for Test {
+impl pallet_balances::Config for Test {
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type Balance = Balance;
 	type Event = Event;
 	type DustRemoval = ();
@@ -84,13 +85,13 @@ impl pallet_balances::Trait for Test {
 parameter_types! {
 	pub const MinimumPeriod: u64 = 5;
 }
-impl pallet_timestamp::Trait for Test {
+impl pallet_timestamp::Config for Test {
 	type Moment = u64;
 	type OnTimestampSet = ();
 	type MinimumPeriod = MinimumPeriod;
 	type WeightInfo = ();
 }
-impl pallet_session::historical::Trait for Test {
+impl pallet_session::historical::Config for Test {
 	type FullIdentification = pallet_staking::Exposure<AccountId, Balance>;
 	type FullIdentificationOf = pallet_staking::ExposureOf<Test>;
 }
@@ -121,7 +122,7 @@ parameter_types! {
 	pub const Offset: u64 = 0;
 }
 
-impl pallet_session::Trait for Test {
+impl pallet_session::Config for Test {
 	type SessionManager = pallet_session::historical::NoteHistoricalRoot<Test, Staking>;
 	type Keys = SessionKeys;
 	type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
@@ -133,6 +134,7 @@ impl pallet_session::Trait for Test {
 	type DisabledValidatorsThreshold = ();
 	type WeightInfo = ();
 }
+
 pallet_staking_reward_curve::build! {
 	const I_NPOS: sp_runtime::curve::PiecewiseLinear<'static> = curve!(
 		min_inflation: 0_025_000,
@@ -150,22 +152,19 @@ parameter_types! {
 
 pub type Extrinsic = sp_runtime::testing::TestXt<Call, ()>;
 
-pub struct CurrencyToVoteHandler;
-impl Convert<u64, u64> for CurrencyToVoteHandler {
-	fn convert(x: u64) -> u64 {
-		x
-	}
-}
-impl Convert<u128, u64> for CurrencyToVoteHandler {
-	fn convert(x: u128) -> u64 {
-		x.saturated_into()
-	}
+impl onchain::Config for Test {
+	type AccountId = AccountId;
+	type BlockNumber = BlockNumber;
+	type BlockWeights = ();
+	type Accuracy = Perbill;
+	type DataProvider = Staking;
 }
 
-impl pallet_staking::Trait for Test {
+impl pallet_staking::Config for Test {
+	const MAX_NOMINATIONS: u32 = 16;
 	type Currency = Balances;
-	type UnixTime = pallet_timestamp::Module<Self>;
-	type CurrencyToVote = CurrencyToVoteHandler;
+	type UnixTime = pallet_timestamp::Pallet<Self>;
+	type CurrencyToVote = frame_support::traits::SaturatingCurrencyToVote;
 	type RewardRemainder = ();
 	type Event = Event;
 	type Slash = ();
@@ -175,35 +174,28 @@ impl pallet_staking::Trait for Test {
 	type SlashCancelOrigin = frame_system::EnsureRoot<Self::AccountId>;
 	type BondingDuration = ();
 	type SessionInterface = Self;
-	type RewardCurve = RewardCurve;
+	type EraPayout = pallet_staking::ConvertCurve<RewardCurve>;
 	type NextNewSession = Session;
-	type ElectionLookahead = ();
-	type Call = Call;
 	type MaxNominatorRewardedPerValidator = MaxNominatorRewardedPerValidator;
-	type UnsignedPriority = ();
-	type MaxIterations = ();
-	type MinSolutionScoreBump = ();
+	type ElectionProvider = onchain::OnChainSequentialPhragmen<Self>;
+	type GenesisElectionProvider = Self::ElectionProvider;
 	type WeightInfo = ();
 }
 
-impl pallet_im_online::Trait for Test {
+impl pallet_im_online::Config for Test {
 	type AuthorityId = UintAuthorityId;
 	type Event = Event;
-	type SessionDuration = Period;
+	type ValidatorSet = Historical;
+	type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
 	type ReportUnresponsiveness = Offences;
 	type UnsignedPriority = ();
 	type WeightInfo = ();
 }
 
-parameter_types! {
-	pub OffencesWeightSoftLimit: Weight = Perbill::from_percent(60) * MaximumBlockWeight::get();
-}
-
-impl pallet_offences::Trait for Test {
+impl pallet_offences::Config for Test {
 	type Event = Event;
 	type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
 	type OnOffenceHandler = Staking;
-	type WeightSoftLimit = OffencesWeightSoftLimit;
 }
 
 impl<T> frame_system::offchain::SendTransactionTypes<T> for Test where Call: From<T> {
@@ -211,7 +203,7 @@ impl<T> frame_system::offchain::SendTransactionTypes<T> for Test where Call: Fro
 	type OverarchingCall = Call;
 }
 
-impl crate::Trait for Test {}
+impl crate::Config for Test {}
 
 pub type Block = sp_runtime::generic::Block<Header, UncheckedExtrinsic>;
 pub type UncheckedExtrinsic = sp_runtime::generic::UncheckedExtrinsic<u32, Call, u64, ()>;
@@ -222,12 +214,13 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic
 	{
-		System: system::{Module, Call, Event<T>},
-		Balances: pallet_balances::{Module, Call, Storage, Config<T>, Event<T>},
-		Staking: pallet_staking::{Module, Call, Config<T>, Storage, Event<T>, ValidateUnsigned},
-		Session: pallet_session::{Module, Call, Storage, Event, Config<T>},
-		ImOnline: pallet_im_online::{Module, Call, Storage, Event<T>, ValidateUnsigned, Config<T>},
-		Offences: pallet_offences::{Module, Call, Storage, Event},
+		System: system::{Pallet, Call, Event<T>},
+		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
+		Staking: pallet_staking::{Pallet, Call, Config<T>, Storage, Event<T>},
+		Session: pallet_session::{Pallet, Call, Storage, Event, Config<T>},
+		ImOnline: pallet_im_online::{Pallet, Call, Storage, Event<T>, ValidateUnsigned, Config<T>},
+		Offences: pallet_offences::{Pallet, Storage, Event},
+		Historical: pallet_session_historical::{Pallet},
 	}
 );
 

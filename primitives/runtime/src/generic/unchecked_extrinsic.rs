@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,7 +30,8 @@ use crate::{
 	OpaqueExtrinsic,
 };
 
-const TRANSACTION_VERSION: u8 = 4;
+/// Current version of the [`UncheckedExtrinsic`] format.
+const EXTRINSIC_VERSION: u8 = 4;
 
 /// A extrinsic right from the external world. This is unchecked and so
 /// can contain a signature.
@@ -69,7 +70,7 @@ impl<Address, Call, Signature, Extra: SignedExtension>
 		signature: Signature,
 		extra: Extra
 	) -> Self {
-		UncheckedExtrinsic {
+		Self {
 			signature: Some((signed, signature, extra)),
 			function,
 		}
@@ -77,7 +78,7 @@ impl<Address, Call, Signature, Extra: SignedExtension>
 
 	/// New instance of an unsigned extrinsic aka "inherent".
 	pub fn new_unsigned(function: Call) -> Self {
-		UncheckedExtrinsic {
+		Self {
 			signature: None,
 			function,
 		}
@@ -101,9 +102,9 @@ impl<Address, Call, Signature, Extra: SignedExtension> Extrinsic
 
 	fn new(function: Call, signed_data: Option<Self::SignaturePayload>) -> Option<Self> {
 		Some(if let Some((address, signature, extra)) = signed_data {
-			UncheckedExtrinsic::new_signed(function, address, signature, extra)
+			Self::new_signed(function, address, signature, extra)
 		} else {
-			UncheckedExtrinsic::new_unsigned(function)
+			Self::new_unsigned(function)
 		})
 	}
 }
@@ -151,7 +152,7 @@ impl<Address, Call, Signature, Extra> ExtrinsicMetadata
 		where
 			Extra: SignedExtension,
 {
-	const VERSION: u8 = TRANSACTION_VERSION;
+	const VERSION: u8 = EXTRINSIC_VERSION;
 	type SignedExtensions = Extra;
 }
 
@@ -233,11 +234,11 @@ where
 
 		let is_signed = version & 0b1000_0000 != 0;
 		let version = version & 0b0111_1111;
-		if version != TRANSACTION_VERSION {
+		if version != EXTRINSIC_VERSION {
 			return Err("Invalid transaction version".into());
 		}
 
-		Ok(UncheckedExtrinsic {
+		Ok(Self {
 			signature: if is_signed { Some(Decode::decode(input)?) } else { None },
 			function: Decode::decode(input)?,
 		})
@@ -257,11 +258,11 @@ where
 			// 1 byte version id.
 			match self.signature.as_ref() {
 				Some(s) => {
-					v.push(TRANSACTION_VERSION | 0b1000_0000);
+					v.push(EXTRINSIC_VERSION | 0b1000_0000);
 					s.encode_to(v);
 				}
 				None => {
-					v.push(TRANSACTION_VERSION & 0b0111_1111);
+					v.push(EXTRINSIC_VERSION & 0b0111_1111);
 				}
 			}
 			self.function.encode_to(v);
@@ -326,7 +327,7 @@ where
 	Extra: SignedExtension,
 {
 	fn from(extrinsic: UncheckedExtrinsic<Address, Call, Signature, Extra>) -> Self {
-		OpaqueExtrinsic::from_bytes(extrinsic.encode().as_slice())
+		Self::from_bytes(extrinsic.encode().as_slice())
 			.expect(
 				"both OpaqueExtrinsic and UncheckedExtrinsic have encoding that is compatible with \
 				raw Vec<u8> encoding; qed"

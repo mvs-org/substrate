@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -28,9 +28,9 @@ use sp_state_machine::{
 };
 use sc_executor::{RuntimeVersion, NativeVersion};
 use sp_externalities::Extensions;
-use sp_core::{NativeOrEncoded,offchain::storage::OffchainOverlayedChanges};
+use sp_core::NativeOrEncoded;
 
-use sp_api::{ProofRecorder, InitializeBlock, StorageTransactionCache};
+use sp_api::{ProofRecorder, StorageTransactionCache};
 use crate::execution_extensions::ExecutionExtensions;
 
 /// Executor Provider
@@ -71,26 +71,21 @@ pub trait CallExecutor<B: BlockT> {
 	/// Before executing the method, passed header is installed as the current header
 	/// of the execution context.
 	fn contextual_call<
-		'a,
-		IB: Fn() -> sp_blockchain::Result<()>,
 		EM: Fn(
 			Result<NativeOrEncoded<R>, Self::Error>,
 			Result<NativeOrEncoded<R>, Self::Error>
 		) -> Result<NativeOrEncoded<R>, Self::Error>,
 		R: Encode + Decode + PartialEq,
-		NC: FnOnce() -> result::Result<R, String> + UnwindSafe,
+		NC: FnOnce() -> result::Result<R, sp_api::ApiError> + UnwindSafe,
 	>(
 		&self,
-		initialize_block_fn: IB,
 		at: &BlockId<B>,
 		method: &str,
 		call_data: &[u8],
 		changes: &RefCell<OverlayedChanges>,
-		offchain_changes: &RefCell<OffchainOverlayedChanges>,
 		storage_transaction_cache: Option<&RefCell<
 			StorageTransactionCache<B, <Self::Backend as crate::backend::Backend<B>>::State>,
 		>>,
-		initialize_block: InitializeBlock<'a, B>,
 		execution_manager: ExecutionManager<EM>,
 		native_call: Option<NC>,
 		proof_recorder: &Option<ProofRecorder<B>>,
@@ -114,8 +109,7 @@ pub trait CallExecutor<B: BlockT> {
 	) -> Result<(Vec<u8>, StorageProof), sp_blockchain::Error> {
 		let trie_state = state.as_trie_backend()
 			.ok_or_else(||
-				Box::new(sp_state_machine::ExecutionError::UnableToGenerateProof)
-					as Box<dyn sp_state_machine::Error>
+				sp_blockchain::Error::from_state(Box::new(sp_state_machine::ExecutionError::UnableToGenerateProof) as Box<_>)
 			)?;
 		self.prove_at_trie_state(trie_state, overlay, method, call_data)
 	}

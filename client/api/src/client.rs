@@ -1,18 +1,20 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! A set of APIs supported by the client along with their primitives.
 
@@ -21,7 +23,7 @@ use sp_core::storage::StorageKey;
 use sp_runtime::{
 	traits::{Block as BlockT, NumberFor},
 	generic::{BlockId, SignedBlock},
-	Justification,
+	Justifications,
 };
 use sp_consensus::BlockOrigin;
 
@@ -29,6 +31,7 @@ use crate::blockchain::Info;
 use crate::notifications::StorageEventStream;
 use sp_utils::mpsc::TracingUnboundedReceiver;
 use sp_blockchain;
+use sc_transaction_pool_api::ChainEvent;
 
 /// Type that implements `futures::Stream` of block import events.
 pub type ImportNotifications<Block> = TracingUnboundedReceiver<BlockImportNotification<Block>>;
@@ -82,17 +85,41 @@ pub trait BlockBackend<Block: BlockT> {
 		id: &BlockId<Block>
 	) -> sp_blockchain::Result<Option<Vec<<Block as BlockT>::Extrinsic>>>;
 
+	/// Get all indexed transactions for a block,
+	/// including renewed transactions.
+	///
+	/// Note that this will only fetch transactions
+	/// that are indexed by the runtime with `storage_index_transaction`.
+	fn block_indexed_body(
+		&self,
+		id: &BlockId<Block>,
+	) -> sp_blockchain::Result<Option<Vec<Vec<u8>>>>;
+
 	/// Get full block by id.
 	fn block(&self, id: &BlockId<Block>) -> sp_blockchain::Result<Option<SignedBlock<Block>>>;
 
 	/// Get block status.
 	fn block_status(&self, id: &BlockId<Block>) -> sp_blockchain::Result<sp_consensus::BlockStatus>;
 
-	/// Get block justification set by id.
-	fn justification(&self, id: &BlockId<Block>) -> sp_blockchain::Result<Option<Justification>>;
+	/// Get block justifications for the block with the given id.
+	fn justifications(&self, id: &BlockId<Block>) -> sp_blockchain::Result<Option<Justifications>>;
 
 	/// Get block hash by number.
 	fn block_hash(&self, number: NumberFor<Block>) -> sp_blockchain::Result<Option<Block::Hash>>;
+
+	/// Get single indexed transaction by content hash. 
+	///
+	/// Note that this will only fetch transactions
+	/// that are indexed by the runtime with `storage_index_transaction`.
+	fn indexed_transaction(
+		&self,
+		hash: &Block::Hash,
+	) -> sp_blockchain::Result<Option<Vec<u8>>>;
+
+	/// Check if transaction index exists.
+	fn has_indexed_transaction(&self, hash: &Block::Hash) -> sp_blockchain::Result<bool> {
+		Ok(self.indexed_transaction(hash)?.is_some())
+	}
 }
 
 /// Provide a list of potential uncle headers for a given block.
@@ -252,7 +279,7 @@ pub struct FinalityNotification<Block: BlockT> {
 	pub header: Block::Header,
 }
 
-impl<B: BlockT> TryFrom<BlockImportNotification<B>> for sp_transaction_pool::ChainEvent<B> {
+impl<B: BlockT> TryFrom<BlockImportNotification<B>> for ChainEvent<B> {
 	type Error = ();
 
 	fn try_from(n: BlockImportNotification<B>) -> Result<Self, ()> {
@@ -267,7 +294,7 @@ impl<B: BlockT> TryFrom<BlockImportNotification<B>> for sp_transaction_pool::Cha
 	}
 }
 
-impl<B: BlockT> From<FinalityNotification<B>> for sp_transaction_pool::ChainEvent<B> {
+impl<B: BlockT> From<FinalityNotification<B>> for ChainEvent<B> {
 	fn from(n: FinalityNotification<B>) -> Self {
 		Self::Finalized {
 			hash: n.hash,

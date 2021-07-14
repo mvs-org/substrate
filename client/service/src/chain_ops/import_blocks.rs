@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -168,10 +168,12 @@ fn import_block_to_queue<TBl, TImpQu>(
 			hash,
 			header: Some(header),
 			body: Some(extrinsics),
-			justification: signed_block.justification,
+			justifications: signed_block.justifications,
 			origin: None,
 			allow_missing_state: false,
 			import_existing: force,
+			state: None,
+			skip_execution: false,
 		}
 	]);
 }
@@ -200,7 +202,7 @@ impl<B: BlockT> Speedometer<B> {
 	/// Creates a fresh Speedometer.
 	fn new() -> Self {
 		Self {
-			best_number: NumberFor::<B>::from(0),
+			best_number: NumberFor::<B>::from(0u32),
 			last_number: None,
 			last_update: Instant::now(),
 		}
@@ -232,9 +234,9 @@ impl<B: BlockT> Speedometer<B> {
 		} else {
 			// If the number of blocks can't be converted to a regular integer, then we need a more
 			// algebraic approach and we stay within the realm of integers.
-			let one_thousand = NumberFor::<B>::from(1_000);
+			let one_thousand = NumberFor::<B>::from(1_000u32);
 			let elapsed = NumberFor::<B>::from(
-				<u32 as TryFrom<_>>::try_from(elapsed_ms).unwrap_or(u32::max_value())
+				<u32 as TryFrom<_>>::try_from(elapsed_ms).unwrap_or(u32::MAX)
 			);
 
 			let speed = diff.saturating_mul(one_thousand).checked_div(&elapsed)

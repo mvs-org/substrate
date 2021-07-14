@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,7 +43,7 @@ mod tests {
 			(H160::from_low_u64_be(16), "0x0000000000000000000000000000000000000010"),
 			(H160::from_low_u64_be(1_000), "0x00000000000000000000000000000000000003e8"),
 			(H160::from_low_u64_be(100_000), "0x00000000000000000000000000000000000186a0"),
-			(H160::from_low_u64_be(u64::max_value()), "0x000000000000000000000000ffffffffffffffff"),
+			(H160::from_low_u64_be(u64::MAX), "0x000000000000000000000000ffffffffffffffff"),
 		];
 
 		for (number, expected) in tests {
@@ -61,7 +61,7 @@ mod tests {
 			(H256::from_low_u64_be(16), "0x0000000000000000000000000000000000000000000000000000000000000010"),
 			(H256::from_low_u64_be(1_000), "0x00000000000000000000000000000000000000000000000000000000000003e8"),
 			(H256::from_low_u64_be(100_000), "0x00000000000000000000000000000000000000000000000000000000000186a0"),
-			(H256::from_low_u64_be(u64::max_value()), "0x000000000000000000000000000000000000000000000000ffffffffffffffff"),
+			(H256::from_low_u64_be(u64::MAX), "0x000000000000000000000000000000000000000000000000ffffffffffffffff"),
 		];
 
 		for (number, expected) in tests {

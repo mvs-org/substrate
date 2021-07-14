@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -159,13 +159,7 @@ pub trait OnOffenceHandler<Reporter, Offender, Res> {
 		offenders: &[OffenceDetails<Reporter, Offender>],
 		slash_fraction: &[Perbill],
 		session: SessionIndex,
-	) -> Result<Res, ()>;
-
-	/// Can an offence be reported now or not. This is an method to short-circuit a call into
-	/// `on_offence`. Ideally, a correct implementation should return `false` if `on_offence` will
-	/// return `Err`. Nonetheless, this is up to the implementation and this trait cannot guarantee
-	/// it.
-	fn can_report() -> bool;
+	) -> Res;
 }
 
 impl<Reporter, Offender, Res: Default> OnOffenceHandler<Reporter, Offender, Res> for () {
@@ -173,11 +167,9 @@ impl<Reporter, Offender, Res: Default> OnOffenceHandler<Reporter, Offender, Res>
 		_offenders: &[OffenceDetails<Reporter, Offender>],
 		_slash_fraction: &[Perbill],
 		_session: SessionIndex,
-	) -> Result<Res, ()> {
-		Ok(Default::default())
+	) -> Res {
+		Default::default()
 	}
-
-	fn can_report() -> bool { true }
 }
 
 /// A details about an offending authority for a particular kind of offence.

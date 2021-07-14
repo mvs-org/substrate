@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -18,17 +18,16 @@
 
 use std::{convert::TryFrom, time::SystemTime};
 
-use crate::{NetworkStatus, NetworkState, NetworkStatusSinks, config::Configuration};
+use crate::config::Configuration;
 use futures_timer::Delay;
 use prometheus_endpoint::{register, Gauge, U64, Registry, PrometheusError, Opts, GaugeVec};
-use sc_telemetry::{telemetry, SUBSTRATE_INFO};
+use sc_telemetry::{telemetry, TelemetryHandle, SUBSTRATE_INFO};
 use sp_api::ProvideRuntimeApi;
 use sp_runtime::traits::{NumberFor, Block, SaturatedConversion, UniqueSaturatedInto};
-use sp_transaction_pool::{PoolStatus, MaintainedTransactionPool};
+use sc_transaction_pool_api::{PoolStatus, MaintainedTransactionPool};
 use sp_utils::metrics::register_globals;
-use sp_utils::mpsc::TracingUnboundedReceiver;
 use sc_client_api::{ClientInfo, UsageProvider};
-use sc_network::config::Role;
+use sc_network::{config::Role, NetworkStatus, NetworkService};
 use std::sync::Arc;
 use std::time::Duration;
 use wasm_timer::Instant;
@@ -112,30 +111,32 @@ pub struct MetricsService {
 	last_update: Instant,
 	last_total_bytes_inbound: u64,
 	last_total_bytes_outbound: u64,
+	telemetry: Option<TelemetryHandle>,
 }
 
 impl MetricsService {
 	/// Creates a `MetricsService` that only sends information
 	/// to the telemetry.
-	pub fn new() -> Self {
+	pub fn new(telemetry: Option<TelemetryHandle>) -> Self {
 		MetricsService {
 			metrics: None,
 			last_total_bytes_inbound: 0,
 			last_total_bytes_outbound: 0,
 			last_update: Instant::now(),
+			telemetry,
 		}
 	}
 
 	/// Creates a `MetricsService` that sends metrics
 	/// to prometheus alongside the telemetry.
 	pub fn with_prometheus(
+		telemetry: Option<TelemetryHandle>,
 		registry: &Registry,
 		config: &Configuration,
 	) -> Result<Self, PrometheusError> {
 		let role_bits = match config.role {
 			Role::Full => 1u64,
 			Role::Light => 2u64,
-			Role::Sentry { .. } => 3u64,
 			Role::Authority { .. } => 4u64,
 		};
 
@@ -150,6 +151,7 @@ impl MetricsService {
 			last_total_bytes_inbound: 0,
 			last_total_bytes_outbound: 0,
 			last_update: Instant::now(),
+			telemetry,
 		})
 	}
 
@@ -160,7 +162,7 @@ impl MetricsService {
 		mut self,
 		client: Arc<TCl>,
 		transactions: Arc<TExPool>,
-		network: NetworkStatusSinks<TBl>,
+		network: Arc<NetworkService<TBl, <TBl as Block>::Hash>>,
 	) where
 		TBl: Block,
 		TCl: ProvideRuntimeApi<TBl> + UsageProvider<TBl>,
@@ -169,40 +171,18 @@ impl MetricsService {
 		let mut timer = Delay::new(Duration::from_secs(0));
 		let timer_interval = Duration::from_secs(5);
 
-		// Metric and telemetry update interval.
-		let net_status_interval = timer_interval;
-		let net_state_interval = Duration::from_secs(30);
-
-		// Source of network information.
-		let mut net_status_rx = Some(network.status_stream(net_status_interval));
-		let mut net_state_rx = Some(network.state_stream(net_state_interval));
-
 		loop {
 			// Wait for the next tick of the timer.
 			(&mut timer).await;
 
 			// Try to get the latest network information.
-			let mut net_status = None;
-			let mut net_state = None;
-			if let Some(rx) = net_status_rx.as_mut() {
-				match Self::latest(rx) {
-					Ok(status) => { net_status = status; }
-					Err(()) => { net_status_rx = None; }
-				}
-			}
-			if let Some(rx) = net_state_rx.as_mut() {
-				match Self::latest(rx) {
-					Ok(state) => { net_state = state; }
-					Err(()) => { net_state_rx = None; }
-				}
-			}
+			let net_status = network.status().await.ok();
 
 			// Update / Send the metrics.
 			self.update(
 				&client.usage_info(),
 				&transactions.status(),
 				net_status,
-				net_state,
 			);
 
 			// Schedule next tick.
@@ -210,31 +190,11 @@ impl MetricsService {
 		}
 	}
 
-	// Try to get the latest value from a receiver, dropping intermediate values.
-	fn latest<T>(rx: &mut TracingUnboundedReceiver<T>) -> Result<Option<T>, ()> {
-		let mut value = None;
-
-		while let Ok(next) = rx.try_next() {
-			match next {
-				Some(v) => {
-					value = Some(v)
-				}
-				None => {
-					log::error!("Receiver closed unexpectedly.");
-					return Err(())
-				}
-			}
-		}
-
-		Ok(value)
-	}
-
 	fn update<T: Block>(
 		&mut self,
 		info: &ClientInfo<T>,
 		txpool_status: &PoolStatus,
 		net_status: Option<NetworkStatus<T>>,
-		net_state: Option<NetworkState>,
 	) {
 		let now = Instant::now();
 		let elapsed = (now - self.last_update).as_secs();
@@ -246,6 +206,7 @@ impl MetricsService {
 
 		// Update/send metrics that are always available.
 		telemetry!(
+			self.telemetry;
 			SUBSTRATE_INFO;
 			"system.interval";
 			"height" => best_number,
@@ -308,6 +269,7 @@ impl MetricsService {
 				};
 
 			telemetry!(
+				self.telemetry;
 				SUBSTRATE_INFO;
 				"system.interval";
 				"peers" => num_peers,
@@ -316,23 +278,14 @@ impl MetricsService {
 			);
 
 			if let Some(metrics) = self.metrics.as_ref() {
-				let best_seen_block = net_status
+				let best_seen_block: Option<u64> = net_status
 					.best_seen_block
-					.map(|num: NumberFor<T>| num.unique_saturated_into() as u64);
+					.map(|num: NumberFor<T>| UniqueSaturatedInto::<u64>::unique_saturated_into(num));
 
 				if let Some(best_seen_block) = best_seen_block {
 					metrics.block_height.with_label_values(&["sync_target"]).set(best_seen_block);
 				}
 			}
-		}
-
-		// Send network state information, if any.
-		if let Some(net_state) = net_state {
-			telemetry!(
-				SUBSTRATE_INFO;
-				"system.network_state";
-				"state" => net_state,
-			);
 		}
 	}
 }

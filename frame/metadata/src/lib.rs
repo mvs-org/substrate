@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2018-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2018-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,7 +53,7 @@ pub enum DecodeDifferent<B, O> where B: 'static, O: 'static {
 }
 
 impl<B, O> Encode for DecodeDifferent<B, O> where B: Encode + 'static, O: Encode + 'static {
-	fn encode_to<W: Output>(&self, dest: &mut W) {
+	fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
 		match self {
 			DecodeDifferent::Encode(b) => b.encode_to(dest),
 			DecodeDifferent::Decoded(o) => o.encode_to(dest),
@@ -139,7 +139,7 @@ pub struct FunctionArgumentMetadata {
 pub struct FnEncode<E>(pub fn() -> E) where E: Encode + 'static;
 
 impl<E: Encode> Encode for FnEncode<E> {
-	fn encode_to<W: Output>(&self, dest: &mut W) {
+	fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
 		self.0().encode_to(dest);
 	}
 }
@@ -238,7 +238,7 @@ pub struct DefaultByteGetter(pub &'static dyn DefaultByte);
 pub type ByteGetter = DecodeDifferent<DefaultByteGetter, Vec<u8>>;
 
 impl Encode for DefaultByteGetter {
-	fn encode_to<W: Output>(&self, dest: &mut W) {
+	fn encode_to<W: Output + ?Sized>(&self, dest: &mut W) {
 		self.0.default_byte().encode_to(dest)
 	}
 }
@@ -299,6 +299,11 @@ pub enum StorageEntryType {
 		key2: DecodeDifferentStr,
 		value: DecodeDifferentStr,
 		key2_hasher: StorageHasher,
+	},
+	NMap {
+		keys: DecodeDifferentArray<&'static str, StringBuf>,
+		hashers: DecodeDifferentArray<StorageHasher>,
+		value: DecodeDifferentStr,
 	},
 }
 
@@ -364,8 +369,10 @@ pub enum RuntimeMetadata {
 	V10(RuntimeMetadataDeprecated),
 	/// Version 11 for runtime metadata. No longer used.
 	V11(RuntimeMetadataDeprecated),
-	/// Version 12 for runtime metadata.
-	V12(RuntimeMetadataV12),
+	/// Version 12 for runtime metadata. No longer used.
+	V12(RuntimeMetadataDeprecated),
+	/// Version 13 for runtime metadata.
+	V13(RuntimeMetadataV13),
 }
 
 /// Enum that should fail.
@@ -374,7 +381,7 @@ pub enum RuntimeMetadata {
 pub enum RuntimeMetadataDeprecated { }
 
 impl Encode for RuntimeMetadataDeprecated {
-	fn encode_to<W: Output>(&self, _dest: &mut W) {}
+	fn encode_to<W: Output + ?Sized>(&self, _dest: &mut W) {}
 }
 
 impl codec::EncodeLike for RuntimeMetadataDeprecated {}
@@ -389,7 +396,7 @@ impl Decode for RuntimeMetadataDeprecated {
 /// The metadata of a runtime.
 #[derive(Eq, Encode, PartialEq, RuntimeDebug)]
 #[cfg_attr(feature = "std", derive(Decode, Serialize))]
-pub struct RuntimeMetadataV12 {
+pub struct RuntimeMetadataV13 {
 	/// Metadata of all the modules.
 	pub modules: DecodeDifferentArray<ModuleMetadata>,
 	/// Metadata of the extrinsic.
@@ -397,7 +404,7 @@ pub struct RuntimeMetadataV12 {
 }
 
 /// The latest version of the metadata.
-pub type RuntimeMetadataLastVersion = RuntimeMetadataV12;
+pub type RuntimeMetadataLastVersion = RuntimeMetadataV13;
 
 /// All metadata about an runtime module.
 #[derive(Clone, PartialEq, Eq, Encode, RuntimeDebug)]
@@ -425,6 +432,6 @@ impl Into<sp_core::OpaqueMetadata> for RuntimeMetadataPrefixed {
 
 impl Into<RuntimeMetadataPrefixed> for RuntimeMetadataLastVersion {
 	fn into(self) -> RuntimeMetadataPrefixed {
-		RuntimeMetadataPrefixed(META_RESERVED, RuntimeMetadata::V12(self))
+		RuntimeMetadataPrefixed(META_RESERVED, RuntimeMetadata::V13(self))
 	}
 }

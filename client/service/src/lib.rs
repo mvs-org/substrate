@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -37,51 +37,50 @@ mod task_manager;
 use std::{io, pin::Pin};
 use std::net::SocketAddr;
 use std::collections::HashMap;
-use std::time::Duration;
 use std::task::Poll;
-use parking_lot::Mutex;
 
 use futures::{Future, FutureExt, Stream, StreamExt, stream, compat::*};
-use sc_network::{NetworkStatus, network_state::NetworkState, PeerId};
+use sc_network::PeerId;
 use log::{warn, debug, error};
 use codec::{Encode, Decode};
 use sp_runtime::generic::BlockId;
 use sp_runtime::traits::{Block as BlockT, Header as HeaderT};
 use parity_util_mem::MallocSizeOf;
-use sp_utils::{status_sinks, mpsc::{tracing_unbounded, TracingUnboundedReceiver,  TracingUnboundedSender}};
+use sp_utils::mpsc::TracingUnboundedReceiver;
 
 pub use self::error::Error;
 pub use self::builder::{
-	new_full_client, new_client, new_full_parts, new_light_parts,
-	spawn_tasks, build_network, BuildNetworkParams, NetworkStarter, build_offchain_workers,
-	SpawnTasksParams, TFullClient, TLightClient, TFullBackend, TLightBackend,
-	TLightBackendWithHash, TLightClientWithBackend,
+	new_full_client, new_db_backend, new_client, new_full_parts, new_light_parts,
+	spawn_tasks, build_network, build_offchain_workers,
+	BuildNetworkParams, KeystoreContainer, NetworkStarter, SpawnTasksParams, TFullClient, TLightClient,
+	TFullBackend, TLightBackend, TLightBackendWithHash, TLightClientWithBackend,
 	TFullCallExecutor, TLightCallExecutor, RpcExtensionBuilder, NoopRpcExtensionBuilder,
 };
 pub use config::{
 	BasePath, Configuration, DatabaseConfig, PruningMode, Role, RpcMethods, TaskExecutor, TaskType,
+	KeepBlocks, TransactionStorageMode,
 };
 pub use sc_chain_spec::{
 	ChainSpec, GenericChainSpec, Properties, RuntimeGenesis, Extension as ChainSpecExtension,
 	NoExtension, ChainType,
 };
-pub use sp_transaction_pool::{TransactionPool, InPoolTransaction, error::IntoPoolError};
-pub use sc_transaction_pool::txpool::Options as TransactionPoolOptions;
+pub use sc_transaction_pool_api::{TransactionPool, InPoolTransaction, error::IntoPoolError};
+pub use sc_transaction_pool::Options as TransactionPoolOptions;
 pub use sc_rpc::Metadata as RpcMetadata;
 pub use sc_executor::NativeExecutionDispatch;
 #[doc(hidden)]
 pub use std::{ops::Deref, result::Result, sync::Arc};
 #[doc(hidden)]
 pub use sc_network::config::{
-	FinalityProofProvider, OnDemand, BoxFinalityProofRequestBuilder, TransactionImport,
+	OnDemand, TransactionImport,
 	TransactionImportFuture,
 };
 pub use sc_tracing::TracingReceiver;
 pub use task_manager::SpawnTaskHandle;
 pub use task_manager::TaskManager;
 pub use sp_consensus::import_queue::ImportQueue;
-use sc_client_api::BlockchainEvents;
-pub use sc_keystore::KeyStorePtr as KeyStore;
+pub use self::client::{LocalCallExecutor, ClientConfig};
+use sc_client_api::{blockchain::HeaderBackend, BlockchainEvents};
 
 const DEFAULT_PROTOCOL_ID: &str = "sup";
 
@@ -124,56 +123,7 @@ impl RpcHandlers {
 	}
 }
 
-/// Sinks to propagate network status updates.
-/// For each element, every time the `Interval` fires we push an element on the sender.
-#[derive(Clone)]
-pub struct NetworkStatusSinks<Block: BlockT> {
-	status: Arc<status_sinks::StatusSinks<NetworkStatus<Block>>>,
-	state: Arc<status_sinks::StatusSinks<NetworkState>>,
-}
-
-impl<Block: BlockT> NetworkStatusSinks<Block> {
-	fn new() -> Self {
-		Self {
-			status: Arc::new(status_sinks::StatusSinks::new()),
-			state: Arc::new(status_sinks::StatusSinks::new()),
-		}
-	}
-
-	/// Returns a receiver that periodically yields a [`NetworkStatus`].
-	pub fn status_stream(&self, interval: Duration)
-		-> TracingUnboundedReceiver<NetworkStatus<Block>>
-	{
-		let (sink, stream) = tracing_unbounded("mpsc_network_status");
-		self.status.push(interval, sink);
-		stream
-	}
-
-	/// Returns a receiver that periodically yields a [`NetworkState`].
-	pub fn state_stream(&self, interval: Duration)
-		-> TracingUnboundedReceiver<NetworkState>
-	{
-		let (sink, stream) = tracing_unbounded("mpsc_network_state");
-		self.state.push(interval, sink);
-		stream
-	}
-
-}
-
-/// Sinks to propagate telemetry connection established events.
-#[derive(Default, Clone)]
-pub struct TelemetryConnectionSinks(Arc<Mutex<Vec<TracingUnboundedSender<()>>>>);
-
-impl TelemetryConnectionSinks {
-	/// Get event stream for telemetry connection established events.
-	pub fn on_connect_stream(&self) -> TracingUnboundedReceiver<()> {
-		let (sink, stream) =tracing_unbounded("mpsc_telemetry_on_connect");
-		self.0.lock().push(sink);
-		stream
-	}
-}
-
-/// An imcomplete set of chain components, but enough to run the chain ops subcommands.
+/// An incomplete set of chain components, but enough to run the chain ops subcommands.
 pub struct PartialComponents<Client, Backend, SelectChain, ImportQueue, TransactionPool, Other> {
 	/// A shared client instance.
 	pub client: Arc<Client>,
@@ -181,16 +131,14 @@ pub struct PartialComponents<Client, Backend, SelectChain, ImportQueue, Transact
 	pub backend: Arc<Backend>,
 	/// The chain task manager.
 	pub task_manager: TaskManager,
-	/// A shared keystore instance.
-	pub keystore: KeyStore,
+	/// A keystore container instance..
+	pub keystore_container: KeystoreContainer,
 	/// A chain selection algorithm instance.
 	pub select_chain: SelectChain,
 	/// An import queue.
 	pub import_queue: ImportQueue,
 	/// A shared transaction pool.
 	pub transaction_pool: Arc<TransactionPool>,
-	/// A registry of all providers of `InherentData`.
-	pub inherent_data_providers: sp_inherents::InherentDataProviders,
 	/// Everything else that needs to be passed into the main build function.
 	pub other: Other,
 }
@@ -200,18 +148,20 @@ pub struct PartialComponents<Client, Backend, SelectChain, ImportQueue, Transact
 /// The `status_sink` contain a list of senders to send a periodic network status to.
 async fn build_network_future<
 	B: BlockT,
-	C: BlockchainEvents<B>,
+	C: BlockchainEvents<B> + HeaderBackend<B>,
 	H: sc_network::ExHashT
 > (
 	role: Role,
 	mut network: sc_network::NetworkWorker<B, H>,
 	client: Arc<C>,
-	status_sinks: NetworkStatusSinks<B>,
 	mut rpc_rx: TracingUnboundedReceiver<sc_rpc::system::Request<B>>,
 	should_have_peers: bool,
 	announce_imported_blocks: bool,
 ) {
 	let mut imported_blocks_stream = client.import_notification_stream().fuse();
+
+	// Current best block at initialization, to report to the RPC layer.
+	let starting_block = client.info().best_number;
 
 	// Stream of finalized blocks reported by the client.
 	let mut finality_notification_stream = {
@@ -244,11 +194,11 @@ async fn build_network_future<
 				};
 
 				if announce_imported_blocks {
-					network.service().announce_block(notification.hash, Vec::new());
+					network.service().announce_block(notification.hash, None);
 				}
 
-				if let sp_consensus::BlockOrigin::Own = notification.origin {
-					network.service().own_block_imported(
+				if notification.is_new_best {
+					network.service().new_best_block_imported(
 						notification.hash,
 						notification.header.number().clone(),
 					);
@@ -312,6 +262,14 @@ async fn build_network_future<
 							))),
 						};
 					}
+					sc_rpc::system::Request::NetworkReservedPeers(sender) => {
+						let reserved_peers = network.reserved_peers();
+						let reserved_peers = reserved_peers
+							.map(|peer_id| peer_id.to_base58())
+							.collect();
+
+						let _ = sender.send(reserved_peers);
+					}
 					sc_rpc::system::Request::NodeRoles(sender) => {
 						use sc_rpc::system::NodeRole;
 
@@ -319,10 +277,18 @@ async fn build_network_future<
 							Role::Authority { .. } => NodeRole::Authority,
 							Role::Light => NodeRole::LightClient,
 							Role::Full => NodeRole::Full,
-							Role::Sentry { .. } => NodeRole::Sentry,
 						};
 
 						let _ = sender.send(vec![node_role]);
+					}
+					sc_rpc::system::Request::SyncState(sender) => {
+						use sc_rpc::system::SyncState;
+
+						let _ = sender.send(SyncState {
+							starting_block: starting_block,
+							current_block: client.info().best_number,
+							highest_block: network.best_seen_block(),
+						});
 					}
 				}
 			}
@@ -331,18 +297,6 @@ async fn build_network_future<
 			// used in the future to perform actions in response of things that happened on
 			// the network.
 			_ = (&mut network).fuse() => {}
-
-			// At a regular interval, we send high-level status as well as
-			// detailed state information of the network on what are called
-			// "status sinks".
-
-			status_sink = status_sinks.status.next().fuse() => {
-				status_sink.send(network.status());
-			}
-
-			state_sink = status_sinks.state.next().fuse() => {
-				state_sink.send(network.network_state());
-			}
 		}
 	}
 }
@@ -389,13 +343,12 @@ fn start_rpc_servers<
 >(
 	config: &Configuration,
 	mut gen_handler: H,
-	rpc_metrics: Option<&sc_rpc_server::RpcMetrics>
+	rpc_metrics: sc_rpc_server::RpcMetrics,
 ) -> Result<Box<dyn std::any::Any + Send + Sync>, error::Error> {
 	fn maybe_start_server<T, F>(address: Option<SocketAddr>, mut start: F) -> Result<Option<T>, io::Error>
 		where F: FnMut(&SocketAddr) -> Result<T, io::Error>,
-	{
-		Ok(match address {
-			Some(mut address) => Some(start(&address)
+		{
+			address.map(|mut address| start(&address)
 				.or_else(|e| match e.kind() {
 					io::ErrorKind::AddrInUse |
 					io::ErrorKind::PermissionDenied => {
@@ -404,10 +357,9 @@ fn start_rpc_servers<
 						start(&address)
 					},
 					_ => Err(e),
-				})?),
-			None => None,
-		})
-	}
+				}
+			) ).transpose()
+		}
 
 	fn deny_unsafe(addr: &SocketAddr, methods: &RpcMethods) -> sc_rpc::DenyUnsafe {
 		let is_exposed_addr = !addr.ip().is_loopback();
@@ -422,18 +374,20 @@ fn start_rpc_servers<
 		config.rpc_ipc.as_ref().map(|path| sc_rpc_server::start_ipc(
 			&*path, gen_handler(
 				sc_rpc::DenyUnsafe::No,
-				sc_rpc_server::RpcMiddleware::new(rpc_metrics.cloned(), "ipc")
+				sc_rpc_server::RpcMiddleware::new(rpc_metrics.clone(), "ipc")
 			)
 		)),
 		maybe_start_server(
 			config.rpc_http,
 			|address| sc_rpc_server::start_http(
 				address,
+				config.rpc_http_threads,
 				config.rpc_cors.as_ref(),
 				gen_handler(
 					deny_unsafe(&address, &config.rpc_methods),
-					sc_rpc_server::RpcMiddleware::new(rpc_metrics.cloned(), "http")
+					sc_rpc_server::RpcMiddleware::new(rpc_metrics.clone(), "http")
 				),
+				config.rpc_max_payload
 			),
 		)?.map(|s| waiting::HttpServer(Some(s))),
 		maybe_start_server(
@@ -444,8 +398,9 @@ fn start_rpc_servers<
 				config.rpc_cors.as_ref(),
 				gen_handler(
 					deny_unsafe(&address, &config.rpc_methods),
-					sc_rpc_server::RpcMiddleware::new(rpc_metrics.cloned(), "ws")
+					sc_rpc_server::RpcMiddleware::new(rpc_metrics.clone(), "ws")
 				),
+				config.rpc_max_payload
 			),
 		)?.map(|s| waiting::WsServer(Some(s))),
 	)))
@@ -459,7 +414,7 @@ fn start_rpc_servers<
 >(
 	_: &Configuration,
 	_: H,
-	_: Option<&sc_rpc_server::RpcMetrics>
+	_: sc_rpc_server::RpcMetrics,
 ) -> Result<Box<dyn std::any::Any + Send + Sync>, error::Error> {
 	Ok(Box::new(()))
 }
@@ -501,7 +456,7 @@ where
 	Pool: TransactionPool<Block=B, Hash=H, Error=E>,
 	B: BlockT,
 	H: std::hash::Hash + Eq + sp_runtime::traits::Member + sp_runtime::traits::MaybeSerialize,
-	E: IntoPoolError + From<sp_transaction_pool::error::Error>,
+	E: IntoPoolError + From<sc_transaction_pool_api::error::Error>,
 {
 	pool.ready()
 		.filter(|t| t.is_propagable())
@@ -520,7 +475,7 @@ where
 	Pool: 'static + TransactionPool<Block=B, Hash=H, Error=E>,
 	B: BlockT,
 	H: std::hash::Hash + Eq + sp_runtime::traits::Member + sp_runtime::traits::MaybeSerialize,
-	E: 'static + IntoPoolError + From<sp_transaction_pool::error::Error>,
+	E: 'static + IntoPoolError + From<sc_transaction_pool_api::error::Error>,
 {
 	fn transactions(&self) -> Vec<(H, B::Extrinsic)> {
 		transactions_to_propagate(&*self.pool)
@@ -550,12 +505,12 @@ where
 
 		let best_block_id = BlockId::hash(self.client.info().best_hash);
 
-		let import_future = self.pool.submit_one(&best_block_id, sp_transaction_pool::TransactionSource::External, uxt);
+		let import_future = self.pool.submit_one(&best_block_id, sc_transaction_pool_api::TransactionSource::External, uxt);
 		Box::pin(async move {
 			match import_future.await {
 				Ok(_) => TransactionImport::NewGood,
 				Err(e) => match e.into_pool_error() {
-					Ok(sp_transaction_pool::error::Error::AlreadyImported(_)) => TransactionImport::KnownGood,
+					Ok(sc_transaction_pool_api::error::Error::AlreadyImported(_)) => TransactionImport::KnownGood,
 					Ok(e) => {
 						debug!("Error adding transaction to the pool: {:?}", e);
 						TransactionImport::Bad
@@ -600,18 +555,20 @@ mod tests {
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = BasicPool::new_full(
 			Default::default(),
+			true.into(),
 			None,
 			spawner,
 			client.clone(),
 		);
 		let source = sp_runtime::transaction_validity::TransactionSource::External;
-		let best = longest_chain.best_chain().unwrap();
+		let best = block_on(longest_chain.best_chain()).unwrap();
 		let transaction = Transfer {
 			amount: 5,
 			nonce: 0,
 			from: AccountKeyring::Alice.into(),
 			to: Default::default(),
-		}.into_signed_tx();
+		}
+		.into_signed_tx();
 		block_on(pool.submit_one(
 			&BlockId::hash(best.hash()), source, transaction.clone()),
 		).unwrap();

@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2018-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2018-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -67,6 +67,7 @@ pub type Backend = substrate_test_client::Backend<substrate_test_runtime::Block>
 
 /// Test client executor.
 pub type Executor = client::LocalCallExecutor<
+	substrate_test_runtime::Block,
 	Backend,
 	NativeExecutor<LocalExecutor>,
 >;
@@ -78,6 +79,7 @@ pub type LightBackend = substrate_test_client::LightBackend<substrate_test_runti
 pub type LightExecutor = sc_light::GenesisCallExecutor<
 	LightBackend,
 	client::LocalCallExecutor<
+		substrate_test_runtime::Block,
 		sc_light::Backend<
 			sc_client_db::light::LightStorage<substrate_test_runtime::Block>,
 			HashFor<substrate_test_runtime::Block>
@@ -92,6 +94,7 @@ pub struct GenesisParameters {
 	changes_trie_config: Option<ChangesTrieConfiguration>,
 	heap_pages_override: Option<u64>,
 	extra_storage: Storage,
+	wasm_code: Option<Vec<u8>>,
 }
 
 impl GenesisParameters {
@@ -113,6 +116,11 @@ impl GenesisParameters {
 			self.extra_storage.clone(),
 		)
 	}
+
+	/// Set the wasm code that should be used at genesis.
+	pub fn set_wasm_code(&mut self, code: Vec<u8>) {
+		self.wasm_code = Some(code);
+	}
 }
 
 impl substrate_test_client::GenesisInit for GenesisParameters {
@@ -120,6 +128,10 @@ impl substrate_test_client::GenesisInit for GenesisParameters {
 		use codec::Encode;
 
 		let mut storage = self.genesis_config().genesis_map();
+
+		if let Some(ref code) = self.wasm_code {
+			storage.top.insert(sp_core::storage::well_known_keys::CODE.to_vec(), code.clone());
+		}
 
 		let child_roots = storage.children_default.iter().map(|(_sk, child_content)| {
 			let state_root = <<<runtime::Block as BlockT>::Header as HeaderT>::Hashing as HashT>::trie_root(
@@ -149,7 +161,11 @@ pub type TestClientBuilder<E, B> = substrate_test_client::TestClientBuilder<
 /// Test client type with `LocalExecutor` and generic Backend.
 pub type Client<B> = client::Client<
 	B,
-	client::LocalCallExecutor<B, sc_executor::NativeExecutor<LocalExecutor>>,
+	client::LocalCallExecutor<
+		substrate_test_runtime::Block,
+		B,
+		sc_executor::NativeExecutor<LocalExecutor>
+	>,
 	substrate_test_runtime::Block,
 	substrate_test_runtime::RuntimeApi,
 >;
@@ -235,13 +251,14 @@ pub trait TestClientBuilderExt<B>: Sized {
 }
 
 impl<B> TestClientBuilderExt<B> for TestClientBuilder<
-	client::LocalCallExecutor<B, sc_executor::NativeExecutor<LocalExecutor>>,
+	client::LocalCallExecutor<
+		substrate_test_runtime::Block,
+		B,
+		sc_executor::NativeExecutor<LocalExecutor>
+	>,
 	B
 > where
 	B: sc_client_api::backend::Backend<substrate_test_runtime::Block> + 'static,
-	// Rust bug: https://github.com/rust-lang/rust/issues/24159
-	<B as sc_client_api::backend::Backend<substrate_test_runtime::Block>>::State:
-		sp_api::StateBackend<HashFor<substrate_test_runtime::Block>>,
 {
 	fn genesis_init_mut(&mut self) -> &mut GenesisParameters {
 		Self::genesis_init_mut(self)
@@ -355,7 +372,7 @@ pub fn new_light() -> (
 		executor,
 		Box::new(sp_core::testing::TaskExecutor::new()),
 		Default::default(),
-	);
+	).expect("Creates LocalCallExecutor");
 	let call_executor = LightExecutor::new(
 		backend.clone(),
 		local_call_executor,

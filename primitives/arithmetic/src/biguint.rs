@@ -1,13 +1,13 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,12 +17,14 @@
 
 //! Infinite precision unsigned integer for substrate runtime.
 
-use num_traits::Zero;
+use num_traits::{Zero, One};
 use sp_std::{cmp::Ordering, ops, prelude::*, vec, cell::RefCell, convert::TryFrom};
+use codec::{Encode, Decode};
 
 // A sensible value for this would be half of the dword size of the host machine. Since the
 // runtime is compiled to 32bit webassembly, using 32 and 64 for single and double respectively
 // should yield the most performance.
+
 /// Representation of a single limb.
 pub type Single = u32;
 /// Representation of two limbs.
@@ -31,6 +33,10 @@ pub type Double = u64;
 const SHIFT: usize = 32;
 /// short form of _Base_. Analogous to the value 10 in base-10 decimal numbers.
 const B: Double = Single::max_value() as Double + 1;
+
+static_assertions::const_assert!(
+	sp_std::mem::size_of::<Double>() - sp_std::mem::size_of::<Single>() == SHIFT / 8
+);
 
 /// Splits a [`Double`] limb number into a tuple of two [`Single`] limb numbers.
 pub fn split(a: Double) -> (Single, Single) {
@@ -73,9 +79,9 @@ fn div_single(a: Double, b: Single) -> (Double, Single) {
 }
 
 /// Simple wrapper around an infinitely large integer, represented as limbs of [`Single`].
-#[derive(Clone, Default)]
+#[derive(Encode, Decode, Clone, Default)]
 pub struct BigUint {
-	/// digits (limbs) of this number (sorted as msb -> lsd).
+	/// digits (limbs) of this number (sorted as msb -> lsb).
 	pub(crate) digits: Vec<Single>,
 }
 
@@ -186,6 +192,7 @@ impl BigUint {
 			let u = Double::from(self.checked_get(j).unwrap_or(0));
 			let v = Double::from(other.checked_get(j).unwrap_or(0));
 			let s = u + v + k;
+			// proof: any number % B will fit into `Single`.
 			w.set(j, (s % B) as Single);
 			k = s / B;
 		}
@@ -208,28 +215,24 @@ impl BigUint {
 			let s = {
 				let u = Double::from(self.checked_get(j).unwrap_or(0));
 				let v = Double::from(other.checked_get(j).unwrap_or(0));
-				let mut needs_borrow = false;
-				let mut t = 0;
 
-				if let Some(v) = u.checked_sub(v) {
-					if let Some(v2) = v.checked_sub(k) {
-						t = v2 % B;
-						k = 0;
-					} else {
-						needs_borrow = true;
-					}
+				if let Some(v2) = u.checked_sub(v).and_then(|v1| v1.checked_sub(k)) {
+					// no borrow is needed. u - v - k can be computed as-is
+					let t = v2;
+					k = 0;
+
+					t
 				} else {
-					needs_borrow = true;
-				}
-				if needs_borrow {
-					t = u + B - v - k;
+					// borrow is needed. Add a `B` to u, before subtracting.
+					// PROOF: addition: `u + B < 2*B`, thus can fit in double.
+					// PROOF: subtraction: if `u - v - k < 0`, then `u + B - v - k < B`.
+					// NOTE: the order of operations is critical to ensure underflow won't happen.
+					let t = u + B - v - k;
 					k = 1;
+
+					t
 				}
-				t
 			};
-			// PROOF: t either comes from `v2 % B`, or from `u + B - v - k`. The former is
-			// trivial. The latter will not overflow this branch will only happen if the sum of
-			// `u - v - k` part has been negative, hence `u + B - v - k < b`.
 			w.set(j, s as Single);
 		}
 
@@ -263,10 +266,9 @@ impl BigUint {
 			let mut k = 0;
 			for i in 0..m {
 				// PROOF: (B−1) × (B−1) + (B−1) + (B−1) = B^2 −1 < B^2. addition is safe.
-				let t =
-					mul_single(self.get(j), other.get(i))
-						+ Double::from(w.get(i + j))
-						+ Double::from(k);
+				let t = mul_single(self.get(j), other.get(i))
+					+ Double::from(w.get(i + j))
+					+ Double::from(k);
 				w.set(i + j, (t % B) as Single);
 				// PROOF: (B^2 - 1) / B < B. conversion is safe.
 				k = (t / B) as Single;
@@ -286,9 +288,9 @@ impl BigUint {
 		let mut out = Self::with_capacity(n);
 		let mut r: Single = 0;
 		// PROOF: (B-1) * B + (B-1) still fits in double
-		let with_r = |x: Double, r: Single| { Double::from(r) * B + x };
+		let with_r = |x: Single, r: Single| { Double::from(r) * B + Double::from(x) };
 		for d in (0..n).rev() {
-			let (q, rr) = div_single(with_r(self.get(d).into(), r), other) ;
+			let (q, rr) = div_single(with_r(self.get(d), r), other) ;
 			out.set(d, q as Single);
 			r = rr;
 		}
@@ -325,7 +327,7 @@ impl BigUint {
 		// PROOF: 0 <= normalizer_bits < SHIFT 0 <= normalizer < B. all conversions are
 		// safe.
 		let normalizer_bits = other.msb().leading_zeros() as Single;
-		let normalizer = (2 as Single).pow(normalizer_bits as u32) as Single;
+		let normalizer = 2_u32.pow(normalizer_bits as u32) as Single;
 
 		// step D1.
 		let mut self_norm = self.mul(&Self::from(normalizer));
@@ -340,7 +342,7 @@ impl BigUint {
 			// step D3.0 Find an estimate of q[j], named qhat.
 			let (qhat, rhat) = {
 				// PROOF: this always fits into `Double`. In the context of Single = u8, and
-				// Double = u16, think of 255 * 256 + 255 which is just u16::max_value().
+				// Double = u16, think of 255 * 256 + 255 which is just u16::MAX.
 				let dividend =
 					Double::from(self_norm.get(j + n))
 						* B
@@ -515,6 +517,12 @@ impl Zero for BigUint {
 	}
 }
 
+impl One for BigUint {
+	fn one() -> Self {
+		Self { digits: vec![Single::one()] }
+	}
+}
+
 macro_rules! impl_try_from_number_for {
 	($([$type:ty, $len:expr]),+) => {
 		$(
@@ -550,12 +558,18 @@ macro_rules! impl_from_for_smaller_than_word {
 		})*
 	}
 }
-impl_from_for_smaller_than_word!(u8, u16, Single);
+impl_from_for_smaller_than_word!(u8, u16, u32);
 
-impl From<Double> for BigUint {
+impl From<u64> for BigUint {
 	fn from(a: Double) -> Self {
 		let (ah, al) = split(a);
 		Self { digits: vec![ah, al] }
+	}
+}
+
+impl From<u128> for BigUint {
+	fn from(a: u128) -> Self {
+		crate::helpers_128bit::to_big_uint(a)
 	}
 }
 
@@ -572,9 +586,14 @@ pub mod tests {
 		let a = SHIFT / 2;
 		let b = SHIFT * 3 / 2;
 		let num: Double = 1 << a | 1 << b;
-		// example when `Single = u8`
-		// assert_eq!(num, 0b_0001_0000_0001_0000)
+		assert_eq!(num, 0x_0001_0000_0001_0000);
 		assert_eq!(split(num), (1 << a, 1 << a));
+
+		let a = SHIFT / 2 + 4;
+		let b = SHIFT / 2 - 4;
+		let num: Double = 1 << (SHIFT + a) | 1 << b;
+		assert_eq!(num, 0x_0010_0000_0000_1000);
+		assert_eq!(split(num), (1 << a, 1 << b));
 	}
 
 	#[test]
@@ -649,14 +668,14 @@ pub mod tests {
 	fn can_try_build_numbers_from_types() {
 		use sp_std::convert::TryFrom;
 		assert_eq!(u64::try_from(with_limbs(1)).unwrap(), 1);
-		assert_eq!(u64::try_from(with_limbs(2)).unwrap(), u32::max_value() as u64 + 2);
+		assert_eq!(u64::try_from(with_limbs(2)).unwrap(), u32::MAX as u64 + 2);
 		assert_eq!(
 			u64::try_from(with_limbs(3)).unwrap_err(),
 			"cannot fit a number into u64",
 		);
 		assert_eq!(
 			u128::try_from(with_limbs(3)).unwrap(),
-			u32::max_value() as u128 + u64::max_value() as u128 + 3
+			u32::MAX as u128 + u64::MAX as u128 + 3
 		);
 	}
 
@@ -708,12 +727,14 @@ pub mod tests {
 		let c = BigUint { digits: vec![1, 1, 2] };
 		let d = BigUint { digits: vec![0, 2] };
 		let e = BigUint { digits: vec![0, 1, 1, 2] };
+		let f = BigUint { digits: vec![7, 8] };
 
 		assert!(a.clone().div(&b, true).is_none());
 		assert!(c.clone().div(&a, true).is_none());
 		assert!(c.clone().div(&d, true).is_none());
 		assert!(e.clone().div(&a, true).is_none());
 
+		assert!(f.clone().div(&b, true).is_none());
 		assert!(c.clone().div(&b, true).is_some());
 	}
 
@@ -721,6 +742,7 @@ pub mod tests {
 	fn div_unit_works() {
 		let a = BigUint { digits: vec![100] };
 		let b = BigUint { digits: vec![1, 100] };
+		let c = BigUint { digits: vec![14, 28, 100] };
 
 		assert_eq!(a.clone().div_unit(1), a);
 		assert_eq!(a.clone().div_unit(0), a);
@@ -732,5 +754,9 @@ pub mod tests {
 		assert_eq!(b.clone().div_unit(2), BigUint::from(((B + 100) / 2) as Single));
 		assert_eq!(b.clone().div_unit(7), BigUint::from(((B + 100) / 7) as Single));
 
+		assert_eq!(c.clone().div_unit(1), c);
+		assert_eq!(c.clone().div_unit(0), c);
+		assert_eq!(c.clone().div_unit(2), BigUint { digits: vec![7, 14, 50] });
+		assert_eq!(c.clone().div_unit(7), BigUint { digits: vec![2, 4, 14] });
 	}
 }

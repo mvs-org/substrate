@@ -1,18 +1,20 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::OutputFormat;
 use ansi_term::Colour;
@@ -91,10 +93,19 @@ impl<B: BlockT> InformantDisplay<B> {
 				(diff_bytes_inbound, diff_bytes_outbound)
 			};
 
-		let (level, status, target) = match (net_status.sync_state, net_status.best_seen_block) {
-			(SyncState::Idle, _) => ("💤", "Idle".into(), "".into()),
-			(SyncState::Downloading, None) => ("⚙️ ", format!("Preparing{}", speed), "".into()),
-			(SyncState::Downloading, Some(n)) => (
+		let (level, status, target) = match (
+			net_status.sync_state,
+			net_status.best_seen_block,
+			net_status.state_sync
+		) {
+			(_, _, Some(state)) => (
+				"⚙️ ",
+				"Downloading state".into(),
+				format!(", {}%, ({:.2}) Mib", state.percentage, (state.size as f32) / (1024f32 * 1024f32)),
+			),
+			(SyncState::Idle, _, _) => ("💤", "Idle".into(), "".into()),
+			(SyncState::Downloading, None, _) => ("⚙️ ", format!("Preparing{}", speed), "".into()),
+			(SyncState::Downloading, Some(n), None) => (
 				"⚙️ ",
 				format!("Syncing{}", speed),
 				format!(", target=#{}", n),
@@ -104,9 +115,8 @@ impl<B: BlockT> InformantDisplay<B> {
 		if self.format.enable_color {
 			info!(
 				target: "substrate",
-				"{} {}{}{} ({} peers), best: #{} ({}), finalized #{} ({}), {} {}",
+				"{} {}{} ({} peers), best: #{} ({}), finalized #{} ({}), {} {}",
 				level,
-				self.format.prefix,
 				Colour::White.bold().paint(&status),
 				target,
 				Colour::White.bold().paint(format!("{}", num_connected_peers)),
@@ -120,9 +130,8 @@ impl<B: BlockT> InformantDisplay<B> {
 		} else {
 			info!(
 				target: "substrate",
-				"{} {}{}{} ({} peers), best: #{} ({}), finalized #{} ({}), ⬇ {} ⬆ {}",
+				"{} {}{} ({} peers), best: #{} ({}), finalized #{} ({}), ⬇ {} ⬆ {}",
 				level,
-				self.format.prefix,
 				status,
 				target,
 				num_connected_peers,
@@ -168,9 +177,9 @@ fn speed<B: BlockT>(
 	} else {
 		// If the number of blocks can't be converted to a regular integer, then we need a more
 		// algebraic approach and we stay within the realm of integers.
-		let one_thousand = NumberFor::<B>::from(1_000);
+		let one_thousand = NumberFor::<B>::from(1_000u32);
 		let elapsed = NumberFor::<B>::from(
-			<u32 as TryFrom<_>>::try_from(elapsed_ms).unwrap_or(u32::max_value())
+			<u32 as TryFrom<_>>::try_from(elapsed_ms).unwrap_or(u32::MAX)
 		);
 
 		let speed = diff.saturating_mul(one_thousand).checked_div(&elapsed)

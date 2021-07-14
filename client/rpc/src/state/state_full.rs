@@ -1,18 +1,20 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! State API backend for full nodes.
 
@@ -25,9 +27,10 @@ use jsonrpc_pubsub::{typed::Subscriber, SubscriptionId, manager::SubscriptionMan
 use rpc::{Result as RpcResult, futures::{stream, Future, Sink, Stream, future::result}};
 
 use sc_rpc_api::state::ReadProof;
-use sc_client_api::backend::Backend;
-use sp_blockchain::{Result as ClientResult, Error as ClientError, HeaderMetadata, CachedHeaderMetadata, HeaderBackend};
-use sc_client_api::BlockchainEvents;
+use sp_blockchain::{
+	Result as ClientResult, Error as ClientError, HeaderMetadata, CachedHeaderMetadata,
+	HeaderBackend
+};
 use sp_core::{
 	Bytes, storage::{well_known_keys, StorageKey, StorageData, StorageChangeSet,
 	ChildInfo, ChildType, PrefixedStorageKey},
@@ -41,7 +44,10 @@ use sp_api::{Metadata, ProvideRuntimeApi, CallApiAt};
 
 use super::{StateBackend, ChildStateBackend, error::{FutureResult, Error, Result}, client_err};
 use std::marker::PhantomData;
-use sc_client_api::{CallExecutor, StorageProvider, ExecutorProvider, ProofProvider};
+use sc_client_api::{
+	Backend, BlockBackend, BlockchainEvents, CallExecutor, StorageProvider, ExecutorProvider,
+	ProofProvider
+};
 
 /// Ranges to query in state_queryStorage.
 struct QueryStorageRange<Block: BlockT> {
@@ -61,19 +67,24 @@ struct QueryStorageRange<Block: BlockT> {
 pub struct FullState<BE, Block: BlockT, Client> {
 	client: Arc<Client>,
 	subscriptions: SubscriptionManager,
-	_phantom: PhantomData<(BE, Block)>
+	_phantom: PhantomData<(BE, Block)>,
+	rpc_max_payload: Option<usize>,
 }
 
 impl<BE, Block: BlockT, Client> FullState<BE, Block, Client>
 	where
 		BE: Backend<Block>,
-		Client: StorageProvider<Block, BE> + HeaderBackend<Block>
+		Client: StorageProvider<Block, BE> + HeaderBackend<Block> + BlockBackend<Block>
 			+ HeaderMetadata<Block, Error = sp_blockchain::Error>,
 		Block: BlockT + 'static,
 {
 	/// Create new state API backend for full nodes.
-	pub fn new(client: Arc<Client>, subscriptions: SubscriptionManager) -> Self {
-		Self { client, subscriptions, _phantom: PhantomData }
+	pub fn new(
+		client: Arc<Client>,
+		subscriptions: SubscriptionManager,
+		rpc_max_payload: Option<usize>,
+	) -> Self {
+		Self { client, subscriptions, _phantom: PhantomData, rpc_max_payload }
 	}
 
 	/// Returns given block hash or best block hash if None is passed.
@@ -219,11 +230,13 @@ impl<BE, Block: BlockT, Client> FullState<BE, Block, Client>
 impl<BE, Block, Client> StateBackend<Block, Client> for FullState<BE, Block, Client> where
 	Block: BlockT + 'static,
 	BE: Backend<Block> + 'static,
-	Client: ExecutorProvider<Block> + StorageProvider<Block, BE> + ProofProvider<Block> + HeaderBackend<Block>
+	Client: ExecutorProvider<Block> + StorageProvider<Block, BE>
+		+ ProofProvider<Block> + HeaderBackend<Block>
 		+ HeaderMetadata<Block, Error = sp_blockchain::Error> + BlockchainEvents<Block>
-		+ CallApiAt<Block, Error = sp_blockchain::Error> + ProvideRuntimeApi<Block>
+		+ CallApiAt<Block> + ProvideRuntimeApi<Block>
+		+ BlockBackend<Block>
 		+ Send + Sync + 'static,
-	Client::Api: Metadata<Block, Error = sp_blockchain::Error>,
+	Client::Api: Metadata<Block>,
 {
 	fn call(
 		&self,
@@ -283,7 +296,7 @@ impl<BE, Block, Client> StateBackend<Block, Client> for FullState<BE, Block, Cli
 						&BlockId::Hash(block), prefix.as_ref(), start_key.as_ref()
 					)
 				)
-				.map(|v| v.take(count as usize).collect())
+				.map(|iter| iter.take(count as usize).collect())
 				.map_err(client_err)))
 	}
 
@@ -342,17 +355,23 @@ impl<BE, Block, Client> StateBackend<Block, Client> for FullState<BE, Block, Cli
 	fn metadata(&self, block: Option<Block::Hash>) -> FutureResult<Bytes> {
 		Box::new(result(
 			self.block_or_best(block)
+				.map_err(client_err)
 				.and_then(|block|
-					self.client.runtime_api().metadata(&BlockId::Hash(block)).map(Into::into)
-				)
-				.map_err(client_err)))
+					self.client.runtime_api().metadata(&BlockId::Hash(block))
+						.map(Into::into)
+						.map_err(|e| Error::Client(Box::new(e))))
+		))
 	}
 
 	fn runtime_version(&self, block: Option<Block::Hash>) -> FutureResult<RuntimeVersion> {
 		Box::new(result(
 			self.block_or_best(block)
-				.and_then(|block| self.client.runtime_version_at(&BlockId::Hash(block)))
-				.map_err(client_err)))
+				.map_err(client_err)
+				.and_then(|block|
+					self.client.runtime_version_at(&BlockId::Hash(block))
+						.map_err(|e| Error::Client(Box::new(e)))
+				)
+		))
 	}
 
 	fn query_storage(
@@ -430,7 +449,7 @@ impl<BE, Block, Client> StateBackend<Block, Client> for FullState<BE, Block, Cli
 					let info = client.info();
 					let version = client
 						.runtime_version_at(&BlockId::hash(info.best_hash))
-						.map_err(client_err)
+						.map_err(|e| Error::Client(Box::new(e)))
 						.map_err(Into::into);
 					if previous_version != version {
 						previous_version = version.clone();
@@ -519,17 +538,64 @@ impl<BE, Block, Client> StateBackend<Block, Client> for FullState<BE, Block, Cli
 	) -> RpcResult<bool> {
 		Ok(self.subscriptions.cancel(id))
 	}
+
+	fn trace_block(
+		&self,
+		block: Block::Hash,
+		targets: Option<String>,
+		storage_keys: Option<String>,
+	) -> FutureResult<sp_rpc::tracing::TraceBlockResponse> {
+		let block_executor = sc_tracing::block::BlockExecutor::new(
+			self.client.clone(),
+			block,
+			targets,
+			storage_keys,
+			self.rpc_max_payload,
+		);
+		Box::new(result(
+			block_executor.trace_block()
+				.map_err(|e| invalid_block::<Block>(block, None, e.to_string()))
+		))
+	}
 }
 
 impl<BE, Block, Client> ChildStateBackend<Block, Client> for FullState<BE, Block, Client> where
 	Block: BlockT + 'static,
 	BE: Backend<Block> + 'static,
-	Client: ExecutorProvider<Block> + StorageProvider<Block, BE> + HeaderBackend<Block>
+	Client: ExecutorProvider<Block> + StorageProvider<Block, BE>
+		+ ProofProvider<Block>
+		+ HeaderBackend<Block> + BlockBackend<Block>
 		+ HeaderMetadata<Block, Error = sp_blockchain::Error> + BlockchainEvents<Block>
-		+ CallApiAt<Block, Error = sp_blockchain::Error> + ProvideRuntimeApi<Block>
+		+ CallApiAt<Block> + ProvideRuntimeApi<Block>
 		+ Send + Sync + 'static,
-	Client::Api: Metadata<Block, Error = sp_blockchain::Error>,
+	Client::Api: Metadata<Block>,
 {
+	fn read_child_proof(
+		&self,
+		block: Option<Block::Hash>,
+		storage_key: PrefixedStorageKey,
+		keys: Vec<StorageKey>,
+	) -> FutureResult<ReadProof<Block::Hash>> {
+		Box::new(result(
+			self.block_or_best(block)
+				.and_then(|block| {
+					let child_info = match ChildType::from_prefixed_key(&storage_key) {
+						Some((ChildType::ParentKeyId, storage_key)) => ChildInfo::new_default(storage_key),
+						None => return Err(sp_blockchain::Error::InvalidChildStorageKey),
+					};
+					self.client
+						.read_child_proof(
+							&BlockId::Hash(block),
+							&child_info,
+							&mut keys.iter().map(|key| key.0.as_ref()),
+						)
+						.map(|proof| proof.iter_nodes().map(|node| node.into()).collect())
+						.map(|proof| ReadProof { at: block, proof })
+				})
+				.map_err(client_err),
+		))
+	}
+
 	fn storage_keys(
 		&self,
 		block: Option<Block::Hash>,
@@ -541,7 +607,7 @@ impl<BE, Block, Client> ChildStateBackend<Block, Client> for FullState<BE, Block
 				.and_then(|block| {
 					let child_info = match ChildType::from_prefixed_key(&storage_key) {
 						Some((ChildType::ParentKeyId, storage_key)) => ChildInfo::new_default(storage_key),
-						None => return Err("Invalid child storage key".into()),
+						None => return Err(sp_blockchain::Error::InvalidChildStorageKey),
 					};
 					self.client.child_storage_keys(
 						&BlockId::Hash(block),
@@ -549,6 +615,29 @@ impl<BE, Block, Client> ChildStateBackend<Block, Client> for FullState<BE, Block
 						&prefix,
 					)
 				})
+				.map_err(client_err)))
+	}
+
+	fn storage_keys_paged(
+		&self,
+		block: Option<Block::Hash>,
+		storage_key: PrefixedStorageKey,
+		prefix: Option<StorageKey>,
+		count: u32,
+		start_key: Option<StorageKey>,
+	) -> FutureResult<Vec<StorageKey>> {
+		Box::new(result(
+			self.block_or_best(block)
+				.and_then(|block| {
+					let child_info = match ChildType::from_prefixed_key(&storage_key) {
+						Some((ChildType::ParentKeyId, storage_key)) => ChildInfo::new_default(storage_key),
+						None => return Err(sp_blockchain::Error::InvalidChildStorageKey),
+					};
+					self.client.child_storage_keys_iter(
+						&BlockId::Hash(block), child_info, prefix.as_ref(), start_key.as_ref(),
+					)
+				})
+				.map(|iter| iter.take(count as usize).collect())
 				.map_err(client_err)))
 	}
 
@@ -563,7 +652,7 @@ impl<BE, Block, Client> ChildStateBackend<Block, Client> for FullState<BE, Block
 				.and_then(|block| {
 					let child_info = match ChildType::from_prefixed_key(&storage_key) {
 						Some((ChildType::ParentKeyId, storage_key)) => ChildInfo::new_default(storage_key),
-						None => return Err("Invalid child storage key".into()),
+						None => return Err(sp_blockchain::Error::InvalidChildStorageKey),
 					};
 					self.client.child_storage(
 						&BlockId::Hash(block),
@@ -585,7 +674,7 @@ impl<BE, Block, Client> ChildStateBackend<Block, Client> for FullState<BE, Block
 				.and_then(|block| {
 					let child_info = match ChildType::from_prefixed_key(&storage_key) {
 						Some((ChildType::ParentKeyId, storage_key)) => ChildInfo::new_default(storage_key),
-						None => return Err("Invalid child storage key".into()),
+						None => return Err(sp_blockchain::Error::InvalidChildStorageKey),
 					};
 					self.client.child_storage_hash(
 						&BlockId::Hash(block),

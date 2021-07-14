@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,19 +22,19 @@ mod tests {
 	use frame_support::metadata::*;
 	use sp_io::TestExternalities;
 	use std::marker::PhantomData;
-	use codec::{Encode, Decode, EncodeLike};
 
 	frame_support::decl_module! {
-		pub struct Module<T: Trait> for enum Call where origin: T::Origin, system=self {}
+		pub struct Module<T: Config> for enum Call where origin: T::Origin, system=frame_support_test {}
 	}
 
-	pub trait Trait {
-		type Origin: Encode + Decode + EncodeLike + std::default::Default;
-		type BlockNumber;
+	pub trait Config: frame_support_test::Config {
+		type Origin2: codec::Codec + codec::EncodeLike + Default
+			+ codec::MaxEncodedLen;
 	}
 
 	frame_support::decl_storage! {
-		trait Store for Module<T: Trait> as TestStorage {
+		generate_storage_info
+		trait Store for Module<T: Config> as TestStorage {
 			// non-getters: pub / $default
 
 			/// Hello, this is doc!
@@ -45,7 +45,7 @@ mod tests {
 
 			// getters: pub / $default
 			// we need at least one type which uses T, otherwise GenesisConfig will complain.
-			GETU32 get(fn u32_getter): T::Origin;
+			GETU32 get(fn u32_getter): T::Origin2;
 			pub PUBGETU32 get(fn pub_u32_getter): u32;
 			GETU32WITHCONFIG get(fn u32_getter_with_config) config(): u32;
 			pub PUBGETU32WITHCONFIG get(fn pub_u32_getter_with_config) config(): u32;
@@ -60,23 +60,29 @@ mod tests {
 			GetOptU32WithBuilderNone get(fn opt_u32_with_builder_none) build(|_| None): Option<u32>;
 
 			// map non-getters: pub / $default
-			MAPU32: map hasher(blake2_128_concat) u32 => Option<String>;
-			pub PUBMAPU32: map hasher(blake2_128_concat) u32 => Option<String>;
-			MAPU32MYDEF: map hasher(blake2_128_concat) u32 => Option<String>;
-			pub PUBMAPU32MYDEF: map hasher(blake2_128_concat) u32 => Option<String>;
+			MAPU32 max_values(3): map hasher(blake2_128_concat) u32 => Option<[u8; 4]>;
+			pub PUBMAPU32: map hasher(blake2_128_concat) u32 => Option<[u8; 4]>;
 
 			// map getters: pub / $default
-			GETMAPU32 get(fn map_u32_getter): map hasher(blake2_128_concat) u32 => String;
-			pub PUBGETMAPU32 get(fn pub_map_u32_getter): map hasher(blake2_128_concat) u32 => String;
-
+			GETMAPU32 get(fn map_u32_getter): map hasher(blake2_128_concat) u32 => [u8; 4];
+			pub PUBGETMAPU32 get(fn pub_map_u32_getter): map hasher(blake2_128_concat) u32 => [u8; 4];
 			GETMAPU32MYDEF get(fn map_u32_getter_mydef):
-				map hasher(blake2_128_concat) u32 => String = "map".into();
+				map hasher(blake2_128_concat) u32 => [u8; 4] = *b"mapd";
 			pub PUBGETMAPU32MYDEF get(fn pub_map_u32_getter_mydef):
-				map hasher(blake2_128_concat) u32 => String = "pubmap".into();
+				map hasher(blake2_128_concat) u32 => [u8; 4] = *b"pubm";
 
-			COMPLEXTYPE1: ::std::vec::Vec<<T as Trait>::Origin>;
-			COMPLEXTYPE2: (Vec<Vec<(u16, Box<()>)>>, u32);
+			DOUBLEMAP max_values(3): double_map
+				hasher(blake2_128_concat) u32, hasher(blake2_128_concat) u32 => Option<[u8; 4]>;
+
+			DOUBLEMAP2: double_map
+				hasher(blake2_128_concat) u32, hasher(blake2_128_concat) u32 => Option<[u8; 4]>;
+
+			COMPLEXTYPE1: (::std::option::Option<T::Origin2>,);
+			COMPLEXTYPE2: ([[(u16, Option<()>); 32]; 12], u32);
 			COMPLEXTYPE3: [u32; 25];
+
+			NMAP: nmap hasher(blake2_128_concat) u32, hasher(twox_64_concat) u16 => u8;
+			NMAP2: nmap hasher(blake2_128_concat) u32 => u8;
 		}
 		add_extra_genesis {
 			build(|_| {});
@@ -85,9 +91,15 @@ mod tests {
 
 	struct TraitImpl {}
 
-	impl Trait for TraitImpl {
+	impl frame_support_test::Config for TraitImpl {
 		type Origin = u32;
 		type BlockNumber = u32;
+		type PalletInfo = frame_support_test::PanicPalletInfo;
+		type DbWeight = ();
+	}
+
+	impl Config for TraitImpl {
+		type Origin2 = u32;
 	}
 
 	const EXPECTED_METADATA: StorageMetadata = StorageMetadata {
@@ -133,7 +145,7 @@ mod tests {
 				StorageEntryMetadata {
 					name: DecodeDifferent::Encode("GETU32"),
 					modifier: StorageEntryModifier::Default,
-					ty: StorageEntryType::Plain(DecodeDifferent::Encode("T::Origin")),
+					ty: StorageEntryType::Plain(DecodeDifferent::Encode("T::Origin2")),
 					default: DecodeDifferent::Encode(
 						DefaultByteGetter(&__GetByteStructGETU32(PhantomData::<TraitImpl>))
 					),
@@ -244,7 +256,7 @@ mod tests {
 					ty: StorageEntryType::Map {
 						hasher: StorageHasher::Blake2_128Concat,
 						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
 						unused: false,
 					},
 					default: DecodeDifferent::Encode(
@@ -258,39 +270,11 @@ mod tests {
 					ty: StorageEntryType::Map {
 						hasher: StorageHasher::Blake2_128Concat,
 						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
 						unused: false,
 					},
 					default: DecodeDifferent::Encode(
 						DefaultByteGetter(&__GetByteStructPUBMAPU32(PhantomData::<TraitImpl>))
-					),
-					documentation: DecodeDifferent::Encode(&[]),
-				},
-				StorageEntryMetadata {
-					name: DecodeDifferent::Encode("MAPU32MYDEF"),
-					modifier: StorageEntryModifier::Optional,
-					ty: StorageEntryType::Map {
-						hasher: StorageHasher::Blake2_128Concat,
-						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
-						unused: false,
-					},
-					default: DecodeDifferent::Encode(
-						DefaultByteGetter(&__GetByteStructMAPU32MYDEF(PhantomData::<TraitImpl>))
-					),
-					documentation: DecodeDifferent::Encode(&[]),
-				},
-				StorageEntryMetadata {
-					name: DecodeDifferent::Encode("PUBMAPU32MYDEF"),
-					modifier: StorageEntryModifier::Optional,
-					ty: StorageEntryType::Map {
-						hasher: StorageHasher::Blake2_128Concat,
-						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
-						unused: false,
-					},
-					default: DecodeDifferent::Encode(
-						DefaultByteGetter(&__GetByteStructPUBMAPU32MYDEF(PhantomData::<TraitImpl>))
 					),
 					documentation: DecodeDifferent::Encode(&[]),
 				},
@@ -300,7 +284,7 @@ mod tests {
 					ty: StorageEntryType::Map {
 						hasher: StorageHasher::Blake2_128Concat,
 						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
 						unused: false,
 					},
 					default: DecodeDifferent::Encode(
@@ -314,7 +298,7 @@ mod tests {
 					ty: StorageEntryType::Map {
 						hasher: StorageHasher::Blake2_128Concat,
 						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
 						unused: false,
 					},
 					default: DecodeDifferent::Encode(
@@ -328,7 +312,7 @@ mod tests {
 					ty: StorageEntryType::Map {
 						hasher: StorageHasher::Blake2_128Concat,
 						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
 						unused: false,
 					},
 					default: DecodeDifferent::Encode(
@@ -342,7 +326,7 @@ mod tests {
 					ty: StorageEntryType::Map {
 						hasher: StorageHasher::Blake2_128Concat,
 						key: DecodeDifferent::Encode("u32"),
-						value: DecodeDifferent::Encode("String"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
 						unused: false,
 					},
 					default: DecodeDifferent::Encode(
@@ -351,9 +335,39 @@ mod tests {
 					documentation: DecodeDifferent::Encode(&[]),
 				},
 				StorageEntryMetadata {
+					name: DecodeDifferent::Encode("DOUBLEMAP"),
+					modifier: StorageEntryModifier::Optional,
+					ty: StorageEntryType::DoubleMap {
+						hasher: StorageHasher::Blake2_128Concat,
+						key1: DecodeDifferent::Encode("u32"),
+						key2: DecodeDifferent::Encode("u32"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
+						key2_hasher: StorageHasher::Blake2_128Concat,
+					},
+					default: DecodeDifferent::Encode(
+						DefaultByteGetter(&__GetByteStructDOUBLEMAP(PhantomData::<TraitImpl>))
+					),
+					documentation: DecodeDifferent::Encode(&[]),
+				},
+				StorageEntryMetadata {
+					name: DecodeDifferent::Encode("DOUBLEMAP2"),
+					modifier: StorageEntryModifier::Optional,
+					ty: StorageEntryType::DoubleMap {
+						hasher: StorageHasher::Blake2_128Concat,
+						key1: DecodeDifferent::Encode("u32"),
+						key2: DecodeDifferent::Encode("u32"),
+						value: DecodeDifferent::Encode("[u8; 4]"),
+						key2_hasher: StorageHasher::Blake2_128Concat,
+					},
+					default: DecodeDifferent::Encode(
+						DefaultByteGetter(&__GetByteStructDOUBLEMAP2(PhantomData::<TraitImpl>))
+					),
+					documentation: DecodeDifferent::Encode(&[]),
+				},
+				StorageEntryMetadata {
 					name: DecodeDifferent::Encode("COMPLEXTYPE1"),
 					modifier: StorageEntryModifier::Default,
-					ty: StorageEntryType::Plain(DecodeDifferent::Encode("::std::vec::Vec<<T as Trait>::Origin>")),
+					ty: StorageEntryType::Plain(DecodeDifferent::Encode("(::std::option::Option<T::Origin2>,)")),
 					default: DecodeDifferent::Encode(
 						DefaultByteGetter(&__GetByteStructCOMPLEXTYPE1(PhantomData::<TraitImpl>))
 					),
@@ -362,7 +376,7 @@ mod tests {
 				StorageEntryMetadata {
 					name: DecodeDifferent::Encode("COMPLEXTYPE2"),
 					modifier: StorageEntryModifier::Default,
-					ty: StorageEntryType::Plain(DecodeDifferent::Encode("(Vec<Vec<(u16, Box<()>)>>, u32)")),
+					ty: StorageEntryType::Plain(DecodeDifferent::Encode("([[(u16, Option<()>); 32]; 12], u32)")),
 					default: DecodeDifferent::Encode(
 						DefaultByteGetter(&__GetByteStructCOMPLEXTYPE2(PhantomData::<TraitImpl>))
 					),
@@ -377,9 +391,258 @@ mod tests {
 					),
 					documentation: DecodeDifferent::Encode(&[]),
 				},
+				StorageEntryMetadata {
+					name: DecodeDifferent::Encode("NMAP"),
+					modifier: StorageEntryModifier::Default,
+					ty: StorageEntryType::NMap {
+						keys: DecodeDifferent::Encode(&["u32", "u16"]),
+						hashers: DecodeDifferent::Encode(&[StorageHasher::Blake2_128Concat, StorageHasher::Twox64Concat]),
+						value: DecodeDifferent::Encode("u8"),
+					},
+					default: DecodeDifferent::Encode(
+						DefaultByteGetter(&__GetByteStructNMAP(PhantomData::<TraitImpl>))
+					),
+					documentation: DecodeDifferent::Encode(&[]),
+				},
+				StorageEntryMetadata {
+					name: DecodeDifferent::Encode("NMAP2"),
+					modifier: StorageEntryModifier::Default,
+					ty: StorageEntryType::NMap {
+						keys: DecodeDifferent::Encode(&["u32"]),
+						hashers: DecodeDifferent::Encode(&[StorageHasher::Blake2_128Concat]),
+						value: DecodeDifferent::Encode("u8"),
+					},
+					default: DecodeDifferent::Encode(
+						DefaultByteGetter(&__GetByteStructNMAP(PhantomData::<TraitImpl>))
+					),
+					documentation: DecodeDifferent::Encode(&[]),
+				},
 			]
 		),
 	};
+
+	#[test]
+	fn storage_info() {
+		use frame_support::{
+			StorageHasher,
+			traits::{StorageInfoTrait, StorageInfo},
+			pallet_prelude::*,
+		};
+		let prefix = |pallet_name, storage_name| {
+			let mut res = [0u8; 32];
+			res[0..16].copy_from_slice(&Twox128::hash(pallet_name));
+			res[16..32].copy_from_slice(&Twox128::hash(storage_name));
+			res
+		};
+		pretty_assertions::assert_eq!(
+			<Module<TraitImpl>>::storage_info(),
+			vec![
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"U32".to_vec(),
+					prefix: prefix(b"TestStorage", b"U32").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBU32".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBU32").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"U32MYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"U32MYDEF").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBU32MYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBU32MYDEF").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GETU32".to_vec(),
+					prefix: prefix(b"TestStorage", b"GETU32").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBGETU32".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBGETU32").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GETU32WITHCONFIG".to_vec(),
+					prefix: prefix(b"TestStorage", b"GETU32WITHCONFIG").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBGETU32WITHCONFIG".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBGETU32WITHCONFIG").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GETU32MYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"GETU32MYDEF").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBGETU32MYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBGETU32MYDEF").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GETU32WITHCONFIGMYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"GETU32WITHCONFIGMYDEF").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBGETU32WITHCONFIGMYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBGETU32WITHCONFIGMYDEF").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBGETU32WITHCONFIGMYDEFOPT".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBGETU32WITHCONFIGMYDEFOPT").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GetU32WithBuilder".to_vec(),
+					prefix: prefix(b"TestStorage", b"GetU32WithBuilder").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GetOptU32WithBuilderSome".to_vec(),
+					prefix: prefix(b"TestStorage", b"GetOptU32WithBuilderSome").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GetOptU32WithBuilderNone".to_vec(),
+					prefix: prefix(b"TestStorage", b"GetOptU32WithBuilderNone").to_vec(),
+					max_values: Some(1),
+					max_size: Some(4),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"MAPU32".to_vec(),
+					prefix: prefix(b"TestStorage", b"MAPU32").to_vec(),
+					max_values: Some(3),
+					max_size: Some(8 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBMAPU32".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBMAPU32").to_vec(),
+					max_values: None,
+					max_size: Some(8 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GETMAPU32".to_vec(),
+					prefix: prefix(b"TestStorage", b"GETMAPU32").to_vec(),
+					max_values: None,
+					max_size: Some(8 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBGETMAPU32".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBGETMAPU32").to_vec(),
+					max_values: None,
+					max_size: Some(8 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"GETMAPU32MYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"GETMAPU32MYDEF").to_vec(),
+					max_values: None,
+					max_size: Some(8 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PUBGETMAPU32MYDEF".to_vec(),
+					prefix: prefix(b"TestStorage", b"PUBGETMAPU32MYDEF").to_vec(),
+					max_values: None,
+					max_size: Some(8 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"DOUBLEMAP".to_vec(),
+					prefix: prefix(b"TestStorage", b"DOUBLEMAP").to_vec(),
+					max_values: Some(3),
+					max_size: Some(12 + 16 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"DOUBLEMAP2".to_vec(),
+					prefix: prefix(b"TestStorage", b"DOUBLEMAP2").to_vec(),
+					max_values: None,
+					max_size: Some(12 + 16 + 16),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"COMPLEXTYPE1".to_vec(),
+					prefix: prefix(b"TestStorage", b"COMPLEXTYPE1").to_vec(),
+					max_values: Some(1),
+					max_size: Some(5),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"COMPLEXTYPE2".to_vec(),
+					prefix: prefix(b"TestStorage", b"COMPLEXTYPE2").to_vec(),
+					max_values: Some(1),
+					max_size: Some(1156),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"COMPLEXTYPE3".to_vec(),
+					prefix: prefix(b"TestStorage", b"COMPLEXTYPE3").to_vec(),
+					max_values: Some(1),
+					max_size: Some(100),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"NMAP".to_vec(),
+					prefix: prefix(b"TestStorage", b"NMAP").to_vec(),
+					max_values: None,
+					max_size: Some(16 + 4 + 8 + 2 + 1),
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"NMAP2".to_vec(),
+					prefix: prefix(b"TestStorage", b"NMAP2").to_vec(),
+					max_values: None,
+					max_size: Some(16 + 4 + 1),
+				},
+			],
+		);
+	}
 
 	#[test]
 	fn store_metadata() {
@@ -414,19 +677,16 @@ mod tests {
 #[cfg(test)]
 #[allow(dead_code)]
 mod test2 {
-	pub trait Trait {
-		type Origin;
-		type BlockNumber;
-	}
+	pub trait Config: frame_support_test::Config {}
 
 	frame_support::decl_module! {
-		pub struct Module<T: Trait> for enum Call where origin: T::Origin, system=self {}
+		pub struct Module<T: Config> for enum Call where origin: T::Origin, system=frame_support_test {}
 	}
 
 	type PairOf<T> = (T, T);
 
 	frame_support::decl_storage! {
-		trait Store for Module<T: Trait> as TestStorage {
+		trait Store for Module<T: Config> as TestStorage {
 			SingleDef : u32;
 			PairDef : PairOf<u32>;
 			Single : Option<u32>;
@@ -441,24 +701,75 @@ mod test2 {
 
 	struct TraitImpl {}
 
-	impl Trait for TraitImpl {
+	impl frame_support_test::Config for TraitImpl {
 		type Origin = u32;
 		type BlockNumber = u32;
+		type PalletInfo = frame_support_test::PanicPalletInfo;
+		type DbWeight = ();
 	}
+
+	impl Config for TraitImpl {}
+
+	#[test]
+	fn storage_info() {
+		use frame_support::{
+			StorageHasher,
+			traits::{StorageInfoTrait, StorageInfo},
+			pallet_prelude::*,
+		};
+		let prefix = |pallet_name, storage_name| {
+			let mut res = [0u8; 32];
+			res[0..16].copy_from_slice(&Twox128::hash(pallet_name));
+			res[16..32].copy_from_slice(&Twox128::hash(storage_name));
+			res
+		};
+		pretty_assertions::assert_eq!(
+			<Module<TraitImpl>>::storage_info(),
+			vec![
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"SingleDef".to_vec(),
+					prefix: prefix(b"TestStorage", b"SingleDef").to_vec(),
+					max_values: Some(1),
+					max_size: None,
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"PairDef".to_vec(),
+					prefix: prefix(b"TestStorage", b"PairDef").to_vec(),
+					max_values: Some(1),
+					max_size: None,
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"Single".to_vec(),
+					prefix: prefix(b"TestStorage", b"Single").to_vec(),
+					max_values: Some(1),
+					max_size: None,
+				},
+				StorageInfo {
+					pallet_name: b"TestStorage".to_vec(),
+					storage_name: b"Pair".to_vec(),
+					prefix: prefix(b"TestStorage", b"Pair").to_vec(),
+					max_values: Some(1),
+					max_size: None,
+				},
+			],
+		);
+	}
+
 }
 
 #[cfg(test)]
 #[allow(dead_code)]
 mod test3 {
-	pub trait Trait {
-		type Origin;
-		type BlockNumber;
-	}
+	pub trait Config: frame_support_test::Config {}
+
 	frame_support::decl_module! {
-		pub struct Module<T: Trait> for enum Call where origin: T::Origin, system=self {}
+		pub struct Module<T: Config> for enum Call where origin: T::Origin, system=frame_support_test {}
 	}
 	frame_support::decl_storage! {
-		trait Store for Module<T: Trait> as Test {
+		trait Store for Module<T: Config> as Test {
 			Foo get(fn foo) config(initial_foo): u32;
 		}
 	}
@@ -467,10 +778,14 @@ mod test3 {
 
 	struct TraitImpl {}
 
-	impl Trait for TraitImpl {
+	impl frame_support_test::Config for TraitImpl {
 		type Origin = u32;
 		type BlockNumber = u32;
+		type PalletInfo = frame_support_test::PanicPalletInfo;
+		type DbWeight = ();
 	}
+
+	impl Config for TraitImpl {}
 }
 
 #[cfg(test)]
@@ -479,20 +794,17 @@ mod test_append_and_len {
 	use sp_io::TestExternalities;
 	use codec::{Encode, Decode};
 
-	pub trait Trait {
-		type Origin;
-		type BlockNumber;
-	}
+	pub trait Config: frame_support_test::Config {}
 
 	frame_support::decl_module! {
-		pub struct Module<T: Trait> for enum Call where origin: T::Origin, system=self {}
+		pub struct Module<T: Config> for enum Call where origin: T::Origin, system=frame_support_test {}
 	}
 
 	#[derive(PartialEq, Eq, Clone, Encode, Decode)]
 	struct NoDef(u32);
 
 	frame_support::decl_storage! {
-		trait Store for Module<T: Trait> as Test {
+		trait Store for Module<T: Config> as Test {
 			NoDefault: Option<NoDef>;
 
 			JustVec: Vec<u32>;
@@ -511,10 +823,14 @@ mod test_append_and_len {
 
 	struct Test {}
 
-	impl Trait for Test {
+	impl frame_support_test::Config for Test {
 		type Origin = u32;
 		type BlockNumber = u32;
+		type PalletInfo = frame_support_test::PanicPalletInfo;
+		type DbWeight = ();
 	}
+
+	impl Config for Test {}
 
 	#[test]
 	fn default_for_option() {

@@ -1,18 +1,20 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
 // This file is part of Substrate.
 
-// Substrate is free software: you can redistribute it and/or modify
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+// This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Substrate is distributed in the hope that it will be useful,
+// This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //! Substrate chain configurations.
 //!
@@ -20,7 +22,7 @@
 //! a runtime-specific configuration file (a.k.a chain spec).
 //!
 //! Basic chain spec type containing all required parameters is
-//! [`ChainSpec`](./struct.ChainSpec.html). It can be extended with
+//! [`GenericChainSpec`]. It can be extended with
 //! additional options that contain configuration specific to your chain.
 //! Usually the extension is going to be an amalgamate of types exposed
 //! by Substrate core modules. To allow the core modules to retrieve
@@ -113,7 +115,6 @@ pub use chain_spec::{
 };
 pub use extension::{Group, Fork, Forks, Extension, GetExtension, get_extension};
 pub use sc_chain_spec_derive::{ChainSpecExtension, ChainSpecGroup};
-pub use sp_chain_spec::{Properties, ChainType};
 
 use serde::{Serialize, de::DeserializeOwned};
 use sp_runtime::BuildStorage;
@@ -121,12 +122,37 @@ use sc_network::config::MultiaddrWithPeerId;
 use sc_telemetry::TelemetryEndpoints;
 use sp_core::storage::Storage;
 
+/// The type of a chain.
+///
+/// This can be used by tools to determine the type of a chain for displaying
+/// additional information or enabling additional features.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Clone)]
+pub enum ChainType {
+	/// A development chain that runs mainly on one node.
+	Development,
+	/// A local chain that runs locally on multiple nodes for testing purposes.
+	Local,
+	/// A live chain.
+	Live,
+	/// Some custom chain type.
+	Custom(String),
+}
+
+impl Default for ChainType {
+	fn default() -> Self {
+		Self::Live
+	}
+}
+
+/// Arbitrary properties defined in chain spec as a JSON object
+pub type Properties = serde_json::map::Map<String, serde_json::Value>;
+
 /// A set of traits for the runtime genesis config.
 pub trait RuntimeGenesis: Serialize + DeserializeOwned + BuildStorage {}
 impl<T: Serialize + DeserializeOwned + BuildStorage> RuntimeGenesis for T {}
 
 /// Common interface of a chain specification.
-pub trait ChainSpec: BuildStorage + Send {
+pub trait ChainSpec: BuildStorage + Send + Sync {
 	/// Spec name.
 	fn name(&self) -> &str;
 	/// Spec id.
@@ -159,6 +185,8 @@ pub trait ChainSpec: BuildStorage + Send {
 	fn set_storage(&mut self, storage: Storage);
 	/// Hardcode infomation to allow light clients to sync quickly into the chain spec.
 	fn set_light_sync_state(&mut self, light_sync_state: SerializableLightSyncState);
+	/// Returns code substitutes that should be used for the on chain wasm.
+	fn code_substitutes(&self) -> std::collections::HashMap<String, Vec<u8>>;
 }
 
 impl std::fmt::Debug for dyn ChainSpec {

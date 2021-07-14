@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2018-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2018-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -90,7 +90,7 @@ impl ChangesTrieConfiguration {
 				return max_digest_interval;
 			}
 
-			current_level = current_level - 1;
+			current_level -= 1;
 		}
 	}
 
@@ -192,7 +192,7 @@ impl ChangesTrieConfiguration {
 
 			digest_step = digest_interval;
 			digest_interval = new_digest_interval;
-			current_level = current_level + 1;
+			current_level += 1;
 		}
 
 		Some((
@@ -226,7 +226,7 @@ mod tests {
 	#[test]
 	fn is_digest_build_required_at_block_works() {
 		fn test_with_zero(zero: u64) {
-			assert!(!config(8, 4).is_digest_build_required_at_block(zero, zero + 0u64));
+			assert!(!config(8, 4).is_digest_build_required_at_block(zero, zero));
 			assert!(!config(8, 4).is_digest_build_required_at_block(zero, zero + 1u64));
 			assert!(!config(8, 4).is_digest_build_required_at_block(zero, zero + 2u64));
 			assert!(!config(8, 4).is_digest_build_required_at_block(zero, zero + 4u64));
@@ -249,7 +249,7 @@ mod tests {
 	#[test]
 	fn digest_level_at_block_works() {
 		fn test_with_zero(zero: u64) {
-			assert_eq!(config(8, 4).digest_level_at_block(zero, zero + 0u64), None);
+			assert_eq!(config(8, 4).digest_level_at_block(zero, zero), None);
 			assert_eq!(config(8, 4).digest_level_at_block(zero, zero + 7u64), None);
 			assert_eq!(config(8, 4).digest_level_at_block(zero, zero + 63u64), None);
 			assert_eq!(config(8, 4).digest_level_at_block(zero, zero + 8u64), Some((1, 8, 1)));

@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2018-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2018-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@ use std::{fmt::Debug, str::FromStr, sync::Arc};
 use structopt::StructOpt;
 
 /// The `check-block` command used to validate blocks.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Clone)]
 pub struct CheckBlockCmd {
 	/// Block hash or number
 	#[structopt(value_name = "HASH or NUMBER")]

@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2019-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,15 +47,15 @@
 //! has multiple misbehaviors. However, accounting for such cases is necessary
 //! to deter a class of "rage-quit" attacks.
 //!
-//! Based on research at https://research.web3.foundation/en/latest/polkadot/slashing/npos/
+//! Based on research at <https://w3f-research.readthedocs.io/en/latest/polkadot/slashing/npos.html>
 
 use super::{
-	EraIndex, Trait, Module, Store, BalanceOf, Exposure, Perbill, SessionInterface,
+	EraIndex, Config, Pallet, Store, BalanceOf, Exposure, Perbill, SessionInterface,
 	NegativeImbalanceOf, UnappliedSlash, Error,
 };
 use sp_runtime::{traits::{Zero, Saturating}, RuntimeDebug, DispatchResult};
 use frame_support::{
-	StorageMap, StorageDoubleMap, ensure,
+	ensure,
 	traits::{Currency, OnUnbalanced, Imbalance},
 };
 use sp_std::vec::Vec;
@@ -190,7 +190,7 @@ impl<Balance> SpanRecord<Balance> {
 
 /// Parameters for performing a slash.
 #[derive(Clone)]
-pub(crate) struct SlashParams<'a, T: 'a + Trait> {
+pub(crate) struct SlashParams<'a, T: 'a + Config> {
 	/// The stash account being slashed.
 	pub(crate) stash: &'a T::AccountId,
 	/// The proportion of the slash.
@@ -214,7 +214,7 @@ pub(crate) struct SlashParams<'a, T: 'a + Trait> {
 ///
 /// The pending slash record returned does not have initialized reporters. Those have
 /// to be set at a higher level, if any.
-pub(crate) fn compute_slash<T: Trait>(params: SlashParams<T>)
+pub(crate) fn compute_slash<T: Config>(params: SlashParams<T>)
 	-> Option<UnappliedSlash<T::AccountId, BalanceOf<T>>>
 {
 	let SlashParams {
@@ -239,7 +239,7 @@ pub(crate) fn compute_slash<T: Trait>(params: SlashParams<T>)
 		return None;
 	}
 
-	let (prior_slash_p, _era_slash) = <Module<T> as Store>::ValidatorSlashInEra::get(
+	let (prior_slash_p, _era_slash) = <Pallet<T> as Store>::ValidatorSlashInEra::get(
 		&slash_era,
 		stash,
 	).unwrap_or((Perbill::zero(), Zero::zero()));
@@ -247,7 +247,7 @@ pub(crate) fn compute_slash<T: Trait>(params: SlashParams<T>)
 	// compare slash proportions rather than slash values to avoid issues due to rounding
 	// error.
 	if slash.deconstruct() > prior_slash_p.deconstruct() {
-		<Module<T> as Store>::ValidatorSlashInEra::insert(
+		<Pallet<T> as Store>::ValidatorSlashInEra::insert(
 			&slash_era,
 			stash,
 			&(slash, own_slash),
@@ -285,12 +285,12 @@ pub(crate) fn compute_slash<T: Trait>(params: SlashParams<T>)
 			// chill the validator - it misbehaved in the current span and should
 			// not continue in the next election. also end the slashing span.
 			spans.end_span(now);
-			<Module<T>>::chill_stash(stash);
+			<Pallet<T>>::chill_stash(stash);
 
 			// make sure to disable validator till the end of this session
 			if T::SessionInterface::disable_validator(stash).unwrap_or(false) {
 				// force a new era, to select a new validator set
-				<Module<T>>::ensure_new_era()
+				<Pallet<T>>::ensure_new_era()
 			}
 		}
 	}
@@ -309,7 +309,7 @@ pub(crate) fn compute_slash<T: Trait>(params: SlashParams<T>)
 
 // doesn't apply any slash, but kicks out the validator if the misbehavior is from
 // the most recent slashing span.
-fn kick_out_if_recent<T: Trait>(
+fn kick_out_if_recent<T: Config>(
 	params: SlashParams<T>,
 ) {
 	// these are not updated by era-span or end-span.
@@ -325,12 +325,12 @@ fn kick_out_if_recent<T: Trait>(
 
 	if spans.era_span(params.slash_era).map(|s| s.index) == Some(spans.span_index()) {
 		spans.end_span(params.now);
-		<Module<T>>::chill_stash(params.stash);
+		<Pallet<T>>::chill_stash(params.stash);
 
 		// make sure to disable validator till the end of this session
 		if T::SessionInterface::disable_validator(params.stash).unwrap_or(false) {
 			// force a new era, to select a new validator set
-			<Module<T>>::ensure_new_era()
+			<Pallet<T>>::ensure_new_era()
 		}
 	}
 }
@@ -338,7 +338,7 @@ fn kick_out_if_recent<T: Trait>(
 /// Slash nominators. Accepts general parameters and the prior slash percentage of the validator.
 ///
 /// Returns the amount of reward to pay out.
-fn slash_nominators<T: Trait>(
+fn slash_nominators<T: Config>(
 	params: SlashParams<T>,
 	prior_slash_p: Perbill,
 	nominators_slashed: &mut Vec<(T::AccountId, BalanceOf<T>)>,
@@ -367,14 +367,14 @@ fn slash_nominators<T: Trait>(
 			let own_slash_by_validator = slash * nominator.value;
 			let own_slash_difference = own_slash_by_validator.saturating_sub(own_slash_prior);
 
-			let mut era_slash = <Module<T> as Store>::NominatorSlashInEra::get(
+			let mut era_slash = <Pallet<T> as Store>::NominatorSlashInEra::get(
 				&slash_era,
 				stash,
 			).unwrap_or_else(|| Zero::zero());
 
 			era_slash += own_slash_difference;
 
-			<Module<T> as Store>::NominatorSlashInEra::insert(
+			<Pallet<T> as Store>::NominatorSlashInEra::insert(
 				&slash_era,
 				stash,
 				&era_slash,
@@ -418,7 +418,7 @@ fn slash_nominators<T: Trait>(
 // dropping this struct applies any necessary slashes, which can lead to free balance
 // being 0, and the account being garbage-collected -- a dead account should get no new
 // metadata.
-struct InspectingSpans<'a, T: Trait + 'a> {
+struct InspectingSpans<'a, T: Config + 'a> {
 	dirty: bool,
 	window_start: EraIndex,
 	stash: &'a T::AccountId,
@@ -430,16 +430,16 @@ struct InspectingSpans<'a, T: Trait + 'a> {
 }
 
 // fetches the slashing spans record for a stash account, initializing it if necessary.
-fn fetch_spans<'a, T: Trait + 'a>(
+fn fetch_spans<'a, T: Config + 'a>(
 	stash: &'a T::AccountId,
 	window_start: EraIndex,
 	paid_out: &'a mut BalanceOf<T>,
 	slash_of: &'a mut BalanceOf<T>,
 	reward_proportion: Perbill,
 ) -> InspectingSpans<'a, T> {
-	let spans = <Module<T> as Store>::SlashingSpans::get(stash).unwrap_or_else(|| {
+	let spans = <Pallet<T> as Store>::SlashingSpans::get(stash).unwrap_or_else(|| {
 		let spans = SlashingSpans::new(window_start);
-		<Module<T> as Store>::SlashingSpans::insert(stash, &spans);
+		<Pallet<T> as Store>::SlashingSpans::insert(stash, &spans);
 		spans
 	});
 
@@ -455,7 +455,7 @@ fn fetch_spans<'a, T: Trait + 'a>(
 	}
 }
 
-impl<'a, T: 'a + Trait> InspectingSpans<'a, T> {
+impl<'a, T: 'a + Config> InspectingSpans<'a, T> {
 	fn span_index(&self) -> SpanIndex {
 		self.spans.span_index
 	}
@@ -488,7 +488,7 @@ impl<'a, T: 'a + Trait> InspectingSpans<'a, T> {
 	) -> Option<SpanIndex> {
 		let target_span = self.era_span(slash_era)?;
 		let span_slash_key = (self.stash.clone(), target_span.index);
-		let mut span_record = <Module<T> as Store>::SpanSlash::get(&span_slash_key);
+		let mut span_record = <Pallet<T> as Store>::SpanSlash::get(&span_slash_key);
 		let mut changed = false;
 
 		let reward = if span_record.slashed < slash {
@@ -519,47 +519,47 @@ impl<'a, T: 'a + Trait> InspectingSpans<'a, T> {
 
 		if changed {
 			self.dirty = true;
-			<Module<T> as Store>::SpanSlash::insert(&span_slash_key, &span_record);
+			<Pallet<T> as Store>::SpanSlash::insert(&span_slash_key, &span_record);
 		}
 
 		Some(target_span.index)
 	}
 }
 
-impl<'a, T: 'a + Trait> Drop for InspectingSpans<'a, T> {
+impl<'a, T: 'a + Config> Drop for InspectingSpans<'a, T> {
 	fn drop(&mut self) {
 		// only update on disk if we slashed this account.
 		if !self.dirty { return }
 
 		if let Some((start, end)) = self.spans.prune(self.window_start) {
 			for span_index in start..end {
-				<Module<T> as Store>::SpanSlash::remove(&(self.stash.clone(), span_index));
+				<Pallet<T> as Store>::SpanSlash::remove(&(self.stash.clone(), span_index));
 			}
 		}
 
-		<Module<T> as Store>::SlashingSpans::insert(self.stash, &self.spans);
+		<Pallet<T> as Store>::SlashingSpans::insert(self.stash, &self.spans);
 	}
 }
 
 /// Clear slashing metadata for an obsolete era.
-pub(crate) fn clear_era_metadata<T: Trait>(obsolete_era: EraIndex) {
-	<Module<T> as Store>::ValidatorSlashInEra::remove_prefix(&obsolete_era);
-	<Module<T> as Store>::NominatorSlashInEra::remove_prefix(&obsolete_era);
+pub(crate) fn clear_era_metadata<T: Config>(obsolete_era: EraIndex) {
+	<Pallet<T> as Store>::ValidatorSlashInEra::remove_prefix(&obsolete_era, None);
+	<Pallet<T> as Store>::NominatorSlashInEra::remove_prefix(&obsolete_era, None);
 }
 
 /// Clear slashing metadata for a dead account.
-pub(crate) fn clear_stash_metadata<T: Trait>(
+pub(crate) fn clear_stash_metadata<T: Config>(
 	stash: &T::AccountId,
 	num_slashing_spans: u32,
 ) -> DispatchResult {
-	let spans = match <Module<T> as Store>::SlashingSpans::get(stash) {
+	let spans = match <Pallet<T> as Store>::SlashingSpans::get(stash) {
 		None => return Ok(()),
 		Some(s) => s,
 	};
 
 	ensure!(num_slashing_spans as usize >= spans.iter().count(), Error::<T>::IncorrectSlashingSpans);
 
-	<Module<T> as Store>::SlashingSpans::remove(stash);
+	<Pallet<T> as Store>::SlashingSpans::remove(stash);
 
 	// kill slashing-span metadata for account.
 	//
@@ -567,7 +567,7 @@ pub(crate) fn clear_stash_metadata<T: Trait>(
 	// in that case, they may re-bond, but it would count again as span 0. Further ancient
 	// slashes would slash into this new bond, since metadata has now been cleared.
 	for span in spans.iter() {
-		<Module<T> as Store>::SpanSlash::remove(&(stash.clone(), span.index));
+		<Pallet<T> as Store>::SpanSlash::remove(&(stash.clone(), span.index));
 	}
 
 	Ok(())
@@ -576,18 +576,18 @@ pub(crate) fn clear_stash_metadata<T: Trait>(
 // apply the slash to a stash account, deducting any missing funds from the reward
 // payout, saturating at 0. this is mildly unfair but also an edge-case that
 // can only occur when overlapping locked funds have been slashed.
-pub fn do_slash<T: Trait>(
+pub fn do_slash<T: Config>(
 	stash: &T::AccountId,
 	value: BalanceOf<T>,
 	reward_payout: &mut BalanceOf<T>,
 	slashed_imbalance: &mut NegativeImbalanceOf<T>,
 ) {
-	let controller = match <Module<T>>::bonded(stash) {
+	let controller = match <Pallet<T>>::bonded(stash) {
 		None => return, // defensive: should always exist.
 		Some(c) => c,
 	};
 
-	let mut ledger = match <Module<T>>::ledger(&controller) {
+	let mut ledger = match <Pallet<T>>::ledger(&controller) {
 		Some(ledger) => ledger,
 		None => return, // nothing to do.
 	};
@@ -603,17 +603,17 @@ pub fn do_slash<T: Trait>(
 			*reward_payout = reward_payout.saturating_sub(missing);
 		}
 
-		<Module<T>>::update_ledger(&controller, &ledger);
+		<Pallet<T>>::update_ledger(&controller, &ledger);
 
 		// trigger the event
-		<Module<T>>::deposit_event(
-			super::RawEvent::Slash(stash.clone(), value)
+		<Pallet<T>>::deposit_event(
+			super::Event::<T>::Slash(stash.clone(), value)
 		);
 	}
 }
 
 /// Apply a previously-unapplied slash.
-pub(crate) fn apply_slash<T: Trait>(unapplied_slash: UnappliedSlash<T::AccountId, BalanceOf<T>>) {
+pub(crate) fn apply_slash<T: Config>(unapplied_slash: UnappliedSlash<T::AccountId, BalanceOf<T>>) {
 	let mut slashed_imbalance = NegativeImbalanceOf::<T>::zero();
 	let mut reward_payout = unapplied_slash.payout;
 
@@ -638,7 +638,7 @@ pub(crate) fn apply_slash<T: Trait>(unapplied_slash: UnappliedSlash<T::AccountId
 
 
 /// Apply a reward payout to some reporters, paying the rewards out of the slashed imbalance.
-fn pay_reporters<T: Trait>(
+fn pay_reporters<T: Config>(
 	reward_payout: BalanceOf<T>,
 	slashed_imbalance: NegativeImbalanceOf<T>,
 	reporters: &[T::AccountId],

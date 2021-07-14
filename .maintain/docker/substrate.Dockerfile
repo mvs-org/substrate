@@ -38,7 +38,7 @@ USER substrate
 # check if executable works in this container
 RUN /usr/local/bin/substrate --version
 
-EXPOSE 30333 9933 9944
+EXPOSE 30333 8830 8831
 VOLUME ["/substrate"]
 
 ENTRYPOINT ["/usr/local/bin/substrate"]

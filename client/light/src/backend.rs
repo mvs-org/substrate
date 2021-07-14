@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -30,9 +30,9 @@ use sp_core::storage::{well_known_keys, ChildInfo};
 use sp_core::offchain::storage::InMemOffchainStorage;
 use sp_state_machine::{
 	Backend as StateBackend, TrieBackend, InMemoryBackend, ChangesTrieTransaction,
-	StorageCollection, ChildStorageCollection,
+	StorageCollection, ChildStorageCollection, IndexOperation,
 };
-use sp_runtime::{generic::BlockId, Justification, Storage};
+use sp_runtime::{generic::BlockId, Justification, Justifications, Storage};
 use sp_runtime::traits::{Block as BlockT, NumberFor, Zero, Header, HashFor};
 use sp_blockchain::{Error as ClientError, Result as ClientResult};
 use sc_client_api::{
@@ -199,6 +199,14 @@ impl<S, Block> ClientBackend<Block> for Backend<S, HashFor<Block>>
 		self.blockchain.storage().finalize_header(block)
 	}
 
+	fn append_justification(
+		&self,
+		_block: BlockId<Block>,
+		_justification: Justification,
+	) -> ClientResult<()> {
+		Ok(())
+	}
+
 	fn blockchain(&self) -> &Blockchain<S> {
 		&self.blockchain
 	}
@@ -235,6 +243,13 @@ impl<S, Block> ClientBackend<Block> for Backend<S, HashFor<Block>>
 		_n: NumberFor<Block>,
 		_revert_finalized: bool,
 	) -> ClientResult<(NumberFor<Block>, HashSet<Block::Hash>)> {
+		Err(ClientError::NotAvailableOnLightClient)
+	}
+
+	fn remove_leaf_block(
+		&self,
+		_hash: &Block::Hash,
+	) -> ClientResult<()> {
 		Err(ClientError::NotAvailableOnLightClient)
 	}
 
@@ -278,7 +293,7 @@ impl<S, Block> BlockImportOperation<Block> for ImportOperation<Block, S>
 		&mut self,
 		header: Block::Header,
 		_body: Option<Vec<Block::Extrinsic>>,
-		_justification: Option<Justification>,
+		_justifications: Option<Justifications>,
 		state: NewBlockState,
 	) -> ClientResult<()> {
 		self.leaf_state = state;
@@ -306,7 +321,7 @@ impl<S, Block> BlockImportOperation<Block> for ImportOperation<Block, S>
 		Ok(())
 	}
 
-	fn reset_storage(&mut self, input: Storage) -> ClientResult<Block::Hash> {
+	fn set_genesis_state(&mut self, input: Storage, commit: bool) -> ClientResult<Block::Hash> {
 		check_genesis_storage(&input)?;
 
 		// changes trie configuration
@@ -332,9 +347,15 @@ impl<S, Block> BlockImportOperation<Block> for ImportOperation<Block, S>
 
 		let storage_update = InMemoryBackend::from(storage);
 		let (storage_root, _) = storage_update.full_storage_root(std::iter::empty(), child_delta);
-		self.storage_update = Some(storage_update);
+		if commit {
+			self.storage_update = Some(storage_update);
+		}
 
 		Ok(storage_root)
+	}
+
+	fn reset_storage(&mut self, _input: Storage) -> ClientResult<Block::Hash> {
+		Err(ClientError::NotAvailableOnLightClient)
 	}
 
 	fn insert_aux<I>(&mut self, ops: I) -> ClientResult<()>
@@ -356,7 +377,7 @@ impl<S, Block> BlockImportOperation<Block> for ImportOperation<Block, S>
 	fn mark_finalized(
 		&mut self,
 		block: BlockId<Block>,
-		_justification: Option<Justification>,
+		_justifications: Option<Justification>,
 	) -> ClientResult<()> {
 		self.finalized_blocks.push(block);
 		Ok(())
@@ -364,6 +385,11 @@ impl<S, Block> BlockImportOperation<Block> for ImportOperation<Block, S>
 
 	fn mark_head(&mut self, block: BlockId<Block>) -> ClientResult<()> {
 		self.set_head = Some(block);
+		Ok(())
+	}
+
+	fn update_transaction_index(&mut self, _index: Vec<IndexOperation>) -> sp_blockchain::Result<()> {
+		// noop for the light client
 		Ok(())
 	}
 }
@@ -441,14 +467,31 @@ impl<H: Hasher> StateBackend<H> for GenesisOrUnavailableState<H>
 		}
 	}
 
-	fn for_keys_in_child_storage<A: FnMut(&[u8])>(
+	fn apply_to_key_values_while<A: FnMut(Vec<u8>, Vec<u8>) -> bool>(
 		&self,
-		child_info: &ChildInfo,
+		child_info: Option<&ChildInfo>,
+		prefix: Option<&[u8]>,
+		start_at: Option<&[u8]>,
+		action: A,
+		allow_missing: bool,
+	) -> ClientResult<bool> {
+		match *self {
+			GenesisOrUnavailableState::Genesis(ref state) =>
+				Ok(state.apply_to_key_values_while(child_info, prefix, start_at, action, allow_missing)
+					.expect(IN_MEMORY_EXPECT_PROOF)),
+			GenesisOrUnavailableState::Unavailable => Err(ClientError::NotAvailableOnLightClient),
+		}
+	}
+
+	fn apply_to_keys_while<A: FnMut(&[u8]) -> bool>(
+		&self,
+		child_info: Option<&ChildInfo>,
+		prefix: Option<&[u8]>,
 		action: A,
 	) {
 		match *self {
 			GenesisOrUnavailableState::Genesis(ref state) =>
-				state.for_keys_in_child_storage(child_info, action),
+				state.apply_to_keys_while(child_info, prefix, action),
 			GenesisOrUnavailableState::Unavailable => (),
 		}
 	}
@@ -506,7 +549,7 @@ impl<H: Hasher> StateBackend<H> for GenesisOrUnavailableState<H>
 		}
 	}
 
-	fn register_overlay_stats(&mut self, _stats: &sp_state_machine::StateMachineStats) { }
+	fn register_overlay_stats(&self, _stats: &sp_state_machine::StateMachineStats) { }
 
 	fn usage_info(&self) -> sp_state_machine::UsageInfo {
 		sp_state_machine::UsageInfo::empty()

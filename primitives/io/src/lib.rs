@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,22 +30,21 @@
 use sp_std::vec::Vec;
 
 #[cfg(feature = "std")]
-use sp_std::ops::Deref;
-
-#[cfg(feature = "std")]
 use tracing;
 
 #[cfg(feature = "std")]
 use sp_core::{
 	crypto::Pair,
-	traits::{KeystoreExt, CallInWasmExt, TaskExecutorExt},
-	offchain::{OffchainExt, TransactionPoolExt},
+	traits::{TaskExecutorExt, RuntimeSpawnExt},
+	offchain::{OffchainDbExt, OffchainWorkerExt, TransactionPoolExt},
 	hexdisplay::HexDisplay,
 	storage::ChildInfo,
 };
+#[cfg(feature = "std")]
+use sp_keystore::{KeystoreExt, SyncCryptoStore};
 
 use sp_core::{
-	OpaquePeerId, crypto::KeyTypeId, ed25519, sr25519, ecdsa, H256, LogLevel,
+	OpaquePeerId, crypto::KeyTypeId, ed25519, sr25519, ecdsa, H256, LogLevel, LogLevelFilter,
 	offchain::{
 		Timestamp, HttpRequestId, HttpRequestStatus, HttpError, StorageKind, OpaqueNetworkState,
 	},
@@ -55,7 +54,7 @@ use sp_core::{
 use sp_trie::{TrieConfiguration, trie_types::Layout};
 
 use sp_runtime_interface::{runtime_interface, Pointer};
-use sp_runtime_interface::pass_by::PassBy;
+use sp_runtime_interface::pass_by::{PassBy, PassByCodec};
 
 use codec::{Encode, Decode};
 
@@ -68,6 +67,8 @@ mod batch_verifier;
 #[cfg(feature = "std")]
 use batch_verifier::BatchVerifier;
 
+const LOG_TARGET: &str = "runtime::io";
+
 /// Error verifying ECDSA signature
 #[derive(Encode, Decode)]
 pub enum EcdsaVerifyError {
@@ -77,6 +78,16 @@ pub enum EcdsaVerifyError {
 	BadV,
 	/// Invalid signature
 	BadSignature,
+}
+
+/// The outcome of calling `storage_kill`. Returned value is the number of storage items
+/// removed from the trie from making the `storage_kill` call.
+#[derive(PassByCodec, Encode, Decode)]
+pub enum KillStorageResult {
+	/// No key remains in the child trie.
+	AllRemoved(u32),
+	/// At least one key still resides in the child trie due to the supplied limit.
+	SomeRemaining(u32),
 }
 
 /// Interface for accessing the storage from within the runtime.
@@ -119,8 +130,43 @@ pub trait Storage {
 
 	/// Clear the storage of each key-value pair where the key starts with the given `prefix`.
 	fn clear_prefix(&mut self, prefix: &[u8]) {
-		Externalities::clear_prefix(*self, prefix)
+		let _ = Externalities::clear_prefix(*self, prefix, None);
 	}
+
+	/// Clear the storage of each key-value pair where the key starts with the given `prefix`.
+	///
+	/// # Limit
+	///
+	/// Deletes all keys from the overlay and up to `limit` keys from the backend if
+	/// it is set to `Some`. No limit is applied when `limit` is set to `None`.
+	///
+	/// The limit can be used to partially delete a prefix storage in case it is too large
+	/// to delete in one go (block).
+	///
+	/// It returns a boolean false iff some keys are remaining in
+	/// the prefix after the functions returns. Also returns a `u32` with
+	/// the number of keys removed from the process.
+	///
+	/// # Note
+	///
+	/// Please note that keys that are residing in the overlay for that prefix when
+	/// issuing this call are all deleted without counting towards the `limit`. Only keys
+	/// written during the current block are part of the overlay. Deleting with a `limit`
+	/// mostly makes sense with an empty overlay for that prefix.
+	///
+	/// Calling this function multiple times per block for the same `prefix` does
+	/// not make much sense because it is not cumulative when called inside the same block.
+	/// Use this function to distribute the deletion of a single child trie across multiple
+	/// blocks.
+	#[version(2)]
+	fn clear_prefix(&mut self, prefix: &[u8], limit: Option<u32>) -> KillStorageResult {
+		let (all_removed, num_removed) = Externalities::clear_prefix(*self, prefix, limit);
+		match all_removed {
+			true => KillStorageResult::AllRemoved(num_removed),
+			false => KillStorageResult::SomeRemaining(num_removed),
+		}
+	}
+
 
 	/// Append the encoded `value` to the storage item at `key`.
 	///
@@ -277,7 +323,30 @@ pub trait DefaultChildStorage {
 		storage_key: &[u8],
 	) {
 		let child_info = ChildInfo::new_default(storage_key);
-		self.kill_child_storage(&child_info);
+		self.kill_child_storage(&child_info, None);
+	}
+
+	/// Clear a child storage key.
+	///
+	/// See `Storage` module `clear_prefix` documentation for `limit` usage.
+	#[version(2)]
+	fn storage_kill(&mut self, storage_key: &[u8], limit: Option<u32>) -> bool {
+		let child_info = ChildInfo::new_default(storage_key);
+		let (all_removed, _num_removed) = self.kill_child_storage(&child_info, limit);
+		all_removed
+	}
+
+	/// Clear a child storage key.
+	///
+	/// See `Storage` module `clear_prefix` documentation for `limit` usage.
+	#[version(3)]
+	fn storage_kill(&mut self, storage_key: &[u8], limit: Option<u32>) -> KillStorageResult {
+		let child_info = ChildInfo::new_default(storage_key);
+		let (all_removed, num_removed) = self.kill_child_storage(&child_info, limit);
+		match all_removed {
+			true => KillStorageResult::AllRemoved(num_removed),
+			false => KillStorageResult::SomeRemaining(num_removed),
+		}
 	}
 
 	/// Check a child storage key.
@@ -301,7 +370,25 @@ pub trait DefaultChildStorage {
 		prefix: &[u8],
 	) {
 		let child_info = ChildInfo::new_default(storage_key);
-		self.clear_child_prefix(&child_info, prefix);
+		let _ = self.clear_child_prefix(&child_info, prefix, None);
+	}
+
+	/// Clear the child storage of each key-value pair where the key starts with the given `prefix`.
+	///
+	/// See `Storage` module `clear_prefix` documentation for `limit` usage.
+	#[version(2)]
+	fn clear_prefix(
+		&mut self,
+		storage_key: &[u8],
+		prefix: &[u8],
+		limit: Option<u32>,
+	) -> KillStorageResult {
+		let child_info = ChildInfo::new_default(storage_key);
+		let (all_removed, num_removed) = self.clear_child_prefix(&child_info, prefix, limit);
+		match all_removed {
+			true => KillStorageResult::AllRemoved(num_removed),
+			false => KillStorageResult::SomeRemaining(num_removed),
+		}
 	}
 
 	/// Default child root calculation.
@@ -353,15 +440,31 @@ pub trait Trie {
 	fn keccak_256_ordered_root(input: Vec<Vec<u8>>) -> H256 {
 		Layout::<sp_core::KeccakHasher>::ordered_trie_root(input)
 	}
+
+	/// Verify trie proof
+	fn blake2_256_verify_proof(root: H256, proof: &[Vec<u8>], key: &[u8], value: &[u8]) -> bool {
+		sp_trie::verify_trie_proof::<Layout<sp_core::Blake2Hasher>, _, _, _>(
+			&root,
+			proof,
+			&[(key, Some(value))],
+		).is_ok()
+	}
+
+	/// Verify trie proof
+	fn keccak_256_verify_proof(root: H256, proof: &[Vec<u8>], key: &[u8], value: &[u8]) -> bool {
+		sp_trie::verify_trie_proof::<Layout<sp_core::KeccakHasher>, _, _, _>(
+			&root,
+			proof,
+			&[(key, Some(value))],
+		).is_ok()
+	}
 }
 
 /// Interface that provides miscellaneous functions for communicating between the runtime and the node.
 #[runtime_interface]
 pub trait Misc {
-	/// The current relay chain identifier.
-	fn chain_id(&self) -> u64 {
-		sp_externalities::Externalities::chain_id(*self)
-	}
+	// NOTE: We use the target 'runtime' for messages produced by general printing functions, instead
+	// of LOG_TARGET.
 
 	/// Print a number.
 	fn print_num(val: u64) {
@@ -387,28 +490,34 @@ pub trait Misc {
 	///
 	/// # Performance
 	///
-	/// Calling this function is very expensive and should only be done very occasionally.
-	/// For getting the runtime version, it requires instantiating the wasm blob and calling a
-	/// function in this blob.
+	/// This function may be very expensive to call depending on the wasm binary. It may be
+	/// relatively cheap if the wasm binary contains version information. In that case, uncompression
+	/// of the wasm blob is the dominating factor.
+	///
+	/// If the wasm binary does not have the version information attached, then a legacy mechanism
+	/// may be involved. This means that a runtime call will be performed to query the version.
+	///
+	/// Calling into the runtime may be incredible expensive and should be approached with care.
 	fn runtime_version(&mut self, wasm: &[u8]) -> Option<Vec<u8>> {
-		// Create some dummy externalities, `Core_version` should not write data anyway.
+		use sp_core::traits::ReadRuntimeVersionExt;
+
 		let mut ext = sp_state_machine::BasicExternalities::default();
 
-		self.extension::<CallInWasmExt>()
-			.expect("No `CallInWasmExt` associated for the current context!")
-			.call_in_wasm(
-				wasm,
-				None,
-				"Core_version",
-				&[],
-				&mut ext,
-				// If a runtime upgrade introduces new host functions that are not provided by
-				// the node, we should not fail at instantiation. Otherwise nodes that are
-				// updated could run this successfully and it could lead to a storage root
-				// mismatch when importing this block.
-				sp_core::traits::MissingHostFunctions::Allow,
-			)
-			.ok()
+		match self
+			.extension::<ReadRuntimeVersionExt>()
+			.expect("No `ReadRuntimeVersionExt` associated for the current context!")
+			.read_runtime_version(wasm, &mut ext)
+		{
+			Ok(v) => Some(v),
+			Err(err) => {
+				log::debug!(
+					target: LOG_TARGET,
+					"cannot read version from the given runtime: {}",
+					err,
+				);
+				None
+			}
+		}
 	}
 }
 
@@ -417,10 +526,9 @@ pub trait Misc {
 pub trait Crypto {
 	/// Returns all `ed25519` public keys for the given key id from the keystore.
 	fn ed25519_public_keys(&mut self, id: KeyTypeId) -> Vec<ed25519::Public> {
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.read()
-			.ed25519_public_keys(id)
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::ed25519_public_keys(keystore, id)
 	}
 
 	/// Generate an `ed22519` key for the given key type using an optional `seed` and
@@ -431,10 +539,9 @@ pub trait Crypto {
 	/// Returns the public key.
 	fn ed25519_generate(&mut self, id: KeyTypeId, seed: Option<Vec<u8>>) -> ed25519::Public {
 		let seed = seed.as_ref().map(|s| std::str::from_utf8(&s).expect("Seed is valid utf8!"));
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.write()
-			.ed25519_generate_new(id, seed)
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::ed25519_generate_new(keystore, id, seed)
 			.expect("`ed25519_generate` failed")
 	}
 
@@ -448,12 +555,12 @@ pub trait Crypto {
 		pub_key: &ed25519::Public,
 		msg: &[u8],
 	) -> Option<ed25519::Signature> {
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.read()
-			.sign_with(id, &pub_key.into(), msg)
-			.map(|sig| ed25519::Signature::from_slice(sig.as_slice()))
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::sign_with(keystore, id, &pub_key.into(), msg)
 			.ok()
+			.flatten()
+			.map(|sig| ed25519::Signature::from_slice(sig.as_slice()))
 	}
 
 	/// Verify `ed25519` signature.
@@ -521,7 +628,6 @@ pub trait Crypto {
 	fn start_batch_verify(&mut self) {
 		let scheduler = self.extension::<TaskExecutorExt>()
 			.expect("No task executor associated with the current context!")
-			.0
 			.clone();
 
 		self.register_extension(VerificationExt(BatchVerifier::new(scheduler)))
@@ -547,10 +653,9 @@ pub trait Crypto {
 
 	/// Returns all `sr25519` public keys for the given key id from the keystore.
 	fn sr25519_public_keys(&mut self, id: KeyTypeId) -> Vec<sr25519::Public> {
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.read()
-			.sr25519_public_keys(id)
+		let keystore = &*** self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::sr25519_public_keys(keystore, id)
 	}
 
 	/// Generate an `sr22519` key for the given key type using an optional seed and
@@ -561,10 +666,9 @@ pub trait Crypto {
 	/// Returns the public key.
 	fn sr25519_generate(&mut self, id: KeyTypeId, seed: Option<Vec<u8>>) -> sr25519::Public {
 		let seed = seed.as_ref().map(|s| std::str::from_utf8(&s).expect("Seed is valid utf8!"));
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.write()
-			.sr25519_generate_new(id, seed)
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::sr25519_generate_new(keystore, id, seed)
 			.expect("`sr25519_generate` failed")
 	}
 
@@ -578,12 +682,12 @@ pub trait Crypto {
 		pub_key: &sr25519::Public,
 		msg: &[u8],
 	) -> Option<sr25519::Signature> {
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.read()
-			.sign_with(id, &pub_key.into(), msg)
-			.map(|sig| sr25519::Signature::from_slice(sig.as_slice()))
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::sign_with(keystore, id, &pub_key.into(), msg)
 			.ok()
+			.flatten()
+			.map(|sig| sr25519::Signature::from_slice(sig.as_slice()))
 	}
 
 	/// Verify an `sr25519` signature.
@@ -596,10 +700,9 @@ pub trait Crypto {
 
 	/// Returns all `ecdsa` public keys for the given key id from the keystore.
 	fn ecdsa_public_keys(&mut self, id: KeyTypeId) -> Vec<ecdsa::Public> {
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.read()
-			.ecdsa_public_keys(id)
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::ecdsa_public_keys(keystore, id)
 	}
 
 	/// Generate an `ecdsa` key for the given key type using an optional `seed` and
@@ -610,10 +713,9 @@ pub trait Crypto {
 	/// Returns the public key.
 	fn ecdsa_generate(&mut self, id: KeyTypeId, seed: Option<Vec<u8>>) -> ecdsa::Public {
 		let seed = seed.as_ref().map(|s| std::str::from_utf8(&s).expect("Seed is valid utf8!"));
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.write()
-			.ecdsa_generate_new(id, seed)
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::ecdsa_generate_new(keystore, id, seed)
 			.expect("`ecdsa_generate` failed")
 	}
 
@@ -627,12 +729,12 @@ pub trait Crypto {
 		pub_key: &ecdsa::Public,
 		msg: &[u8],
 	) -> Option<ecdsa::Signature> {
-		self.extension::<KeystoreExt>()
-			.expect("No `keystore` associated for the current context!")
-			.read()
-			.sign_with(id, &pub_key.into(), msg)
-			.map(|sig| ecdsa::Signature::from_slice(sig.as_slice()))
+		let keystore = &***self.extension::<KeystoreExt>()
+			.expect("No `keystore` associated for the current context!");
+		SyncCryptoStore::sign_with(keystore, id, &pub_key.into(), msg)
 			.ok()
+			.flatten()
+			.map(|sig| ecdsa::Signature::from_slice(sig.as_slice()))
 	}
 
 	/// Verify `ecdsa` signature.
@@ -715,6 +817,11 @@ pub trait Hashing {
 		sp_core::hashing::keccak_256(data)
 	}
 
+	/// Conduct a 512-bit Keccak hash.
+	fn keccak_512(data: &[u8]) -> [u8; 64] {
+		sp_core::hashing::keccak_512(data)
+	}
+
 	/// Conduct a 256-bit Sha2 hash.
 	fn sha2_256(data: &[u8]) -> [u8; 32] {
 		sp_core::hashing::sha2_256(data)
@@ -746,6 +853,20 @@ pub trait Hashing {
 	}
 }
 
+/// Interface that provides transaction indexing API.
+#[runtime_interface]
+pub trait TransactionIndex {
+	/// Add transaction index. Returns indexed content hash.
+	fn index(&mut self, extrinsic: u32, size: u32, context_hash: [u8; 32]) {
+		self.storage_index_transaction(extrinsic, &context_hash, size);
+	}
+
+	/// Conduct a 512-bit Keccak hash.
+	fn renew(&mut self, extrinsic: u32, context_hash: [u8; 32]) {
+		self.storage_renew_transaction_index(extrinsic, &context_hash);
+	}
+}
+
 /// Interface that provides functions to access the Offchain DB.
 #[runtime_interface]
 pub trait OffchainIndex {
@@ -762,7 +883,7 @@ pub trait OffchainIndex {
 
 #[cfg(feature = "std")]
 sp_externalities::decl_extension! {
-	/// The keystore extension to register/retrieve from the externalities.
+	/// Batch verification extension to register/retrieve from the externalities.
 	pub struct VerificationExt(BatchVerifier);
 }
 
@@ -776,7 +897,7 @@ pub trait Offchain {
 	/// Even if this function returns `true`, it does not mean that any keys are configured
 	/// and that the validator is registered in the chain.
 	fn is_validator(&mut self) -> bool {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("is_validator can be called only in the offchain worker context")
 			.is_validator()
 	}
@@ -793,21 +914,21 @@ pub trait Offchain {
 
 	/// Returns information about the local node's network state.
 	fn network_state(&mut self) -> Result<OpaqueNetworkState, ()> {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("network_state can be called only in the offchain worker context")
 			.network_state()
 	}
 
 	/// Returns current UNIX timestamp (in millis)
 	fn timestamp(&mut self) -> Timestamp {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("timestamp can be called only in the offchain worker context")
 			.timestamp()
 	}
 
 	/// Pause the execution until `deadline` is reached.
 	fn sleep_until(&mut self, deadline: Timestamp) {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("sleep_until can be called only in the offchain worker context")
 			.sleep_until(deadline)
 	}
@@ -817,7 +938,7 @@ pub trait Offchain {
 	/// This is a truly random, non-deterministic seed generated by host environment.
 	/// Obviously fine in the off-chain worker context.
 	fn random_seed(&mut self) -> [u8; 32] {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("random_seed can be called only in the offchain worker context")
 			.random_seed()
 	}
@@ -827,8 +948,9 @@ pub trait Offchain {
 	/// Note this storage is not part of the consensus, it's only accessible by
 	/// offchain worker tasks running on the same machine. It IS persisted between runs.
 	fn local_storage_set(&mut self, kind: StorageKind, key: &[u8], value: &[u8]) {
-		self.extension::<OffchainExt>()
-			.expect("local_storage_set can be called only in the offchain worker context")
+		self.extension::<OffchainDbExt>()
+			.expect("local_storage_set can be called only in the offchain call context with
+				OffchainDb extension")
 			.local_storage_set(kind, key, value)
 	}
 
@@ -837,8 +959,9 @@ pub trait Offchain {
 	/// Note this storage is not part of the consensus, it's only accessible by
 	/// offchain worker tasks running on the same machine. It IS persisted between runs.
 	fn local_storage_clear(&mut self, kind: StorageKind, key: &[u8]) {
-		self.extension::<OffchainExt>()
-			.expect("local_storage_clear can be called only in the offchain worker context")
+		self.extension::<OffchainDbExt>()
+			.expect("local_storage_clear can be called only in the offchain call context with
+				OffchainDb extension")
 			.local_storage_clear(kind, key)
 	}
 
@@ -858,9 +981,15 @@ pub trait Offchain {
 		old_value: Option<Vec<u8>>,
 		new_value: &[u8],
 	) -> bool {
-		self.extension::<OffchainExt>()
-			.expect("local_storage_compare_and_set can be called only in the offchain worker context")
-			.local_storage_compare_and_set(kind, key, old_value.as_ref().map(|v| v.deref()), new_value)
+		self.extension::<OffchainDbExt>()
+			.expect("local_storage_compare_and_set can be called only in the offchain call context
+				with OffchainDb extension")
+			.local_storage_compare_and_set(
+				kind,
+				key,
+				old_value.as_deref(),
+				new_value,
+			)
 	}
 
 	/// Gets a value from the local storage.
@@ -869,8 +998,9 @@ pub trait Offchain {
 	/// Note this storage is not part of the consensus, it's only accessible by
 	/// offchain worker tasks running on the same machine. It IS persisted between runs.
 	fn local_storage_get(&mut self, kind: StorageKind, key: &[u8]) -> Option<Vec<u8>> {
-		self.extension::<OffchainExt>()
-			.expect("local_storage_get can be called only in the offchain worker context")
+		self.extension::<OffchainDbExt>()
+			.expect("local_storage_get can be called only in the offchain call context with
+				OffchainDb extension")
 			.local_storage_get(kind, key)
 	}
 
@@ -884,7 +1014,7 @@ pub trait Offchain {
 		uri: &str,
 		meta: &[u8],
 	) -> Result<HttpRequestId, ()> {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("http_request_start can be called only in the offchain worker context")
 			.http_request_start(method, uri, meta)
 	}
@@ -896,7 +1026,7 @@ pub trait Offchain {
 		name: &str,
 		value: &str,
 	) -> Result<(), ()> {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("http_request_add_header can be called only in the offchain worker context")
 			.http_request_add_header(request_id, name, value)
 	}
@@ -913,7 +1043,7 @@ pub trait Offchain {
 		chunk: &[u8],
 		deadline: Option<Timestamp>,
 	) -> Result<(), HttpError> {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("http_request_write_body can be called only in the offchain worker context")
 			.http_request_write_body(request_id, chunk, deadline)
 	}
@@ -930,7 +1060,7 @@ pub trait Offchain {
 		ids: &[HttpRequestId],
 		deadline: Option<Timestamp>,
 	) -> Vec<HttpRequestStatus> {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("http_response_wait can be called only in the offchain worker context")
 			.http_response_wait(ids, deadline)
 	}
@@ -940,7 +1070,7 @@ pub trait Offchain {
 	/// Returns a vector of pairs `(HeaderKey, HeaderValue)`.
 	/// NOTE response headers have to be read before response body.
 	fn http_response_headers(&mut self, request_id: HttpRequestId) -> Vec<(Vec<u8>, Vec<u8>)> {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("http_response_headers can be called only in the offchain worker context")
 			.http_response_headers(request_id)
 	}
@@ -959,7 +1089,7 @@ pub trait Offchain {
 		buffer: &mut [u8],
 		deadline: Option<Timestamp>,
 	) -> Result<u32, HttpError> {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("http_response_read_body can be called only in the offchain worker context")
 			.http_response_read_body(request_id, buffer, deadline)
 			.map(|r| r as u32)
@@ -967,7 +1097,7 @@ pub trait Offchain {
 
 	/// Set the authorized nodes and authorized_only flag.
 	fn set_authorized_nodes(&mut self, nodes: Vec<OpaquePeerId>, authorized_only: bool) {
-		self.extension::<OffchainExt>()
+		self.extension::<OffchainWorkerExt>()
 			.expect("set_authorized_nodes can be called only in the offchain worker context")
 			.set_authorized_nodes(nodes, authorized_only)
 	}
@@ -975,7 +1105,7 @@ pub trait Offchain {
 
 /// Wasm only interface that provides functions for calling into the allocator.
 #[runtime_interface(wasm_only)]
-trait Allocator {
+pub trait Allocator {
 	/// Malloc the given number of bytes and return the pointer to the allocated memory location.
 	fn malloc(&mut self, size: u32) -> Pointer<u8> {
 		self.allocate_memory(size).expect("Failed to allocate memory")
@@ -1005,6 +1135,11 @@ pub trait Logging {
 				message,
 			)
 		}
+	}
+
+	/// Returns the max log level used by the host.
+	fn max_level() -> LogLevelFilter {
+		log::max_level().into()
 	}
 }
 
@@ -1101,7 +1236,7 @@ mod tracing_setup {
 	};
 	use super::{wasm_tracing, Crossing};
 
-	const TRACING_SET : AtomicBool = AtomicBool::new(false);
+	static TRACING_SET: AtomicBool = AtomicBool::new(false);
 
 
 	/// The PassingTracingSubscriber implements `tracing_core::Subscriber`
@@ -1246,6 +1381,34 @@ pub trait Sandbox {
 	}
 }
 
+/// Wasm host functions for managing tasks.
+///
+/// This should not be used directly. Use `sp_tasks` for running parallel tasks instead.
+#[runtime_interface(wasm_only)]
+pub trait RuntimeTasks {
+	/// Wasm host function for spawning task.
+	///
+	/// This should not be used directly. Use `sp_tasks::spawn` instead.
+	fn spawn(dispatcher_ref: u32, entry: u32, payload: Vec<u8>) -> u64 {
+		sp_externalities::with_externalities(|mut ext|{
+			let runtime_spawn = ext.extension::<RuntimeSpawnExt>()
+				.expect("Cannot spawn without dynamic runtime dispatcher (RuntimeSpawnExt)");
+			runtime_spawn.spawn_call(dispatcher_ref, entry, payload)
+		}).expect("`RuntimeTasks::spawn`: called outside of externalities context")
+	}
+
+	/// Wasm host function for joining a task.
+	///
+	/// This should not be used directly. Use `join` of `sp_tasks::spawn` result instead.
+	fn join(handle: u64) -> Vec<u8> {
+		sp_externalities::with_externalities(|mut ext| {
+			let runtime_spawn = ext.extension::<RuntimeSpawnExt>()
+				.expect("Cannot join without dynamic runtime dispatcher (RuntimeSpawnExt)");
+			runtime_spawn.join(handle)
+		}).expect("`RuntimeTasks::join`: called outside of externalities context")
+	}
+ }
+
 /// Allocator used by Substrate when executing the Wasm runtime.
 #[cfg(not(feature = "std"))]
 struct WasmAllocator;
@@ -1313,6 +1476,8 @@ pub type SubstrateHostFunctions = (
 	sandbox::HostFunctions,
 	crate::trie::HostFunctions,
 	offchain_index::HostFunctions,
+	runtime_tasks::HostFunctions,
+	transaction_index::HostFunctions,
 );
 
 #[cfg(test)]
@@ -1377,7 +1542,7 @@ mod tests {
 		});
 
 		t.execute_with(|| {
-			storage::clear_prefix(b":abc");
+			assert!(matches!(storage::clear_prefix(b":abc", None), KillStorageResult::AllRemoved(2)));
 
 			assert!(storage::get(b":a").is_some());
 			assert!(storage::get(b":abdd").is_some());

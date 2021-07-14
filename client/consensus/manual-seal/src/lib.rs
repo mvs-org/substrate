@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2020-2021 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -26,10 +26,9 @@ use sp_consensus::{
 	import_queue::{Verifier, BasicQueue, CacheKeyId, BoxBlockImport},
 };
 use sp_blockchain::HeaderBackend;
-use sp_inherents::InherentDataProviders;
-use sp_runtime::{traits::Block as BlockT, Justification};
+use sp_inherents::CreateInherentDataProviders;
+use sp_runtime::{traits::Block as BlockT, Justifications, ConsensusEngineId};
 use sc_client_api::backend::{Backend as ClientBackend, Finalizer};
-use sc_transaction_pool::txpool;
 use std::{sync::Arc, marker::PhantomData};
 use prometheus_endpoint::Registry;
 
@@ -48,20 +47,25 @@ pub use self::{
 	rpc::{EngineCommand, CreatedBlock},
 };
 use sp_api::{ProvideRuntimeApi, TransactionFor};
+use sc_transaction_pool_api::TransactionPool;
+
+/// The `ConsensusEngineId` of Manual Seal.
+pub const MANUAL_SEAL_ENGINE_ID: ConsensusEngineId = [b'm', b'a', b'n', b'l'];
 
 /// The verifier for the manual seal engine; instantly finalizes.
 struct ManualSealVerifier;
 
+#[async_trait::async_trait]
 impl<B: BlockT> Verifier<B> for ManualSealVerifier {
-	fn verify(
+	async fn verify(
 		&mut self,
 		origin: BlockOrigin,
 		header: B::Header,
-		justification: Option<Justification>,
+		justifications: Option<Justifications>,
 		body: Option<Vec<B::Extrinsic>>,
 	) -> Result<(BlockImportParams<B, ()>, Option<Vec<(CacheKeyId, Vec<u8>)>>), String> {
 		let mut import_params = BlockImportParams::new(origin, header);
-		import_params.justification = justification;
+		import_params.justifications = justifications;
 		import_params.body = body;
 		import_params.finalized = false;
 		import_params.fork_choice = Some(ForkChoiceStrategy::LongestChain);
@@ -73,7 +77,7 @@ impl<B: BlockT> Verifier<B> for ManualSealVerifier {
 /// Instantiate the import queue for the manual seal consensus engine.
 pub fn import_queue<Block, Transaction>(
 	block_import: BoxBlockImport<Block, Transaction>,
-	spawner: &impl sp_core::traits::SpawnNamed,
+	spawner: &impl sp_core::traits::SpawnEssentialNamed,
 	registry: Option<&Registry>,
 ) -> BasicQueue<Block, Transaction>
 	where
@@ -84,14 +88,13 @@ pub fn import_queue<Block, Transaction>(
 		ManualSealVerifier,
 		block_import,
 		None,
-		None,
 		spawner,
 		registry,
 	)
 }
 
 /// Params required to start the instant sealing authorship task.
-pub struct ManualSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, A: txpool::ChainApi, SC, CS> {
+pub struct ManualSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, TP, SC, CS, CIDP> {
 	/// Block import instance for well. importing blocks.
 	pub block_import: BI,
 
@@ -102,7 +105,7 @@ pub struct ManualSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, A: txpool
 	pub client: Arc<C>,
 
 	/// Shared reference to the transaction pool.
-	pub pool: Arc<txpool::Pool<A>>,
+	pub pool: Arc<TP>,
 
 	/// Stream<Item = EngineCommands>, Basically the receiving end of a channel for sending commands to
 	/// the authorship task.
@@ -114,12 +117,12 @@ pub struct ManualSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, A: txpool
 	/// Digest provider for inclusion in blocks.
 	pub consensus_data_provider: Option<Box<dyn ConsensusDataProvider<B, Transaction = TransactionFor<C, B>>>>,
 
-	/// Provider for inherents to include in blocks.
-	pub inherent_data_providers: InherentDataProviders,
+	/// Something that can create the inherent data providers.
+	pub create_inherent_data_providers: CIDP,
 }
 
 /// Params required to start the manual sealing authorship task.
-pub struct InstantSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, A: txpool::ChainApi, SC> {
+pub struct InstantSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, TP, SC, CIDP> {
 	/// Block import instance for well. importing blocks.
 	pub block_import: BI,
 
@@ -130,7 +133,7 @@ pub struct InstantSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, A: txpoo
 	pub client: Arc<C>,
 
 	/// Shared reference to the transaction pool.
-	pub pool: Arc<txpool::Pool<A>>,
+	pub pool: Arc<TP>,
 
 	/// SelectChain strategy.
 	pub select_chain: SC,
@@ -138,12 +141,12 @@ pub struct InstantSealParams<B: BlockT, BI, E, C: ProvideRuntimeApi<B>, A: txpoo
 	/// Digest provider for inclusion in blocks.
 	pub consensus_data_provider: Option<Box<dyn ConsensusDataProvider<B, Transaction = TransactionFor<C, B>>>>,
 
-	/// Provider for inherents to include in blocks.
-	pub inherent_data_providers: InherentDataProviders,
+	/// Something that can create the inherent data providers.
+	pub create_inherent_data_providers: CIDP,
 }
 
 /// Creates the background authorship task for the manual seal engine.
-pub async fn run_manual_seal<B, BI, CB, E, C, A, SC, CS>(
+pub async fn run_manual_seal<B, BI, CB, E, C, TP, SC, CS, CIDP>(
 	ManualSealParams {
 		mut block_import,
 		mut env,
@@ -151,23 +154,23 @@ pub async fn run_manual_seal<B, BI, CB, E, C, A, SC, CS>(
 		pool,
 		mut commands_stream,
 		select_chain,
-		inherent_data_providers,
 		consensus_data_provider,
-		..
-	}: ManualSealParams<B, BI, E, C, A, SC, CS>
+		create_inherent_data_providers,
+	}: ManualSealParams<B, BI, E, C, TP, SC, CS, CIDP>
 )
 	where
-		A: txpool::ChainApi<Block=B> + 'static,
 		B: BlockT + 'static,
 		BI: BlockImport<B, Error = sp_consensus::Error, Transaction = sp_api::TransactionFor<C, B>>
 			+ Send + Sync + 'static,
 		C: HeaderBackend<B> + Finalizer<B, CB> + ProvideRuntimeApi<B> + 'static,
 		CB: ClientBackend<B> + 'static,
 		E: Environment<B> + 'static,
-		E::Error: std::fmt::Display,
-		<E::Proposer as Proposer<B>>::Error: std::fmt::Display,
+		E::Proposer: Proposer<B, Transaction = TransactionFor<C, B>>,
 		CS: Stream<Item=EngineCommand<<B as BlockT>::Hash>> + Unpin + 'static,
 		SC: SelectChain<B> + 'static,
+		TransactionFor<C, B>: 'static,
+		TP: TransactionPool<Block = B>,
+		CIDP: CreateInherentDataProviders<B, ()>,
 {
 	while let Some(command) = commands_stream.next().await {
 		match command {
@@ -186,14 +189,15 @@ pub async fn run_manual_seal<B, BI, CB, E, C, A, SC, CS>(
 						env: &mut env,
 						select_chain: &select_chain,
 						block_import: &mut block_import,
-						inherent_data_provider: &inherent_data_providers,
 						consensus_data_provider: consensus_data_provider.as_ref().map(|p| &**p),
 						pool: pool.clone(),
 						client: client.clone(),
+						create_inherent_data_providers: &create_inherent_data_providers,
 					}
 				).await;
 			}
 			EngineCommand::FinalizeBlock { hash, sender, justification } => {
+				let justification = justification.map(|j| (MANUAL_SEAL_ENGINE_ID, j));
 				finalize_block(
 					FinalizeBlockParams {
 						hash,
@@ -211,7 +215,7 @@ pub async fn run_manual_seal<B, BI, CB, E, C, A, SC, CS>(
 /// runs the background authorship task for the instant seal engine.
 /// instant-seal creates a new block for every transaction imported into
 /// the transaction pool.
-pub async fn run_instant_seal<B, BI, CB, E, C, A, SC>(
+pub async fn run_instant_seal<B, BI, CB, E, C, TP, SC, CIDP>(
 	InstantSealParams {
 		block_import,
 		env,
@@ -219,26 +223,25 @@ pub async fn run_instant_seal<B, BI, CB, E, C, A, SC>(
 		pool,
 		select_chain,
 		consensus_data_provider,
-		inherent_data_providers,
-		..
-	}: InstantSealParams<B, BI, E, C, A, SC>
+		create_inherent_data_providers,
+	}: InstantSealParams<B, BI, E, C, TP, SC, CIDP>
 )
 	where
-		A: txpool::ChainApi<Block=B> + 'static,
 		B: BlockT + 'static,
 		BI: BlockImport<B, Error = sp_consensus::Error, Transaction = sp_api::TransactionFor<C, B>>
 			+ Send + Sync + 'static,
 		C: HeaderBackend<B> + Finalizer<B, CB> + ProvideRuntimeApi<B> + 'static,
 		CB: ClientBackend<B> + 'static,
 		E: Environment<B> + 'static,
-		E::Error: std::fmt::Display,
-		<E::Proposer as Proposer<B>>::Error: std::fmt::Display,
-		SC: SelectChain<B> + 'static
+		E::Proposer: Proposer<B, Transaction = TransactionFor<C, B>>,
+		SC: SelectChain<B> + 'static,
+		TransactionFor<C, B>: 'static,
+		TP: TransactionPool<Block = B>,
+		CIDP: CreateInherentDataProviders<B, ()>,
 {
 	// instant-seal creates blocks as soon as transactions are imported
 	// into the transaction pool.
-	let commands_stream = pool.validated_pool()
-		.import_notification_stream()
+	let commands_stream = pool.import_notification_stream()
 		.map(|_| {
 			EngineCommand::SealNewBlock {
 				create_empty: false,
@@ -257,7 +260,7 @@ pub async fn run_instant_seal<B, BI, CB, E, C, A, SC>(
 			commands_stream,
 			select_chain,
 			consensus_data_provider,
-			inherent_data_providers,
+			create_inherent_data_providers,
 		}
 	).await
 }
@@ -271,12 +274,11 @@ mod tests {
 		AccountKeyring::*,
 		TestClientBuilder,
 	};
-	use sc_transaction_pool::{BasicPool, RevalidationType, txpool::Options};
+	use sc_transaction_pool::{BasicPool, RevalidationType, Options};
 	use substrate_test_runtime_transaction_pool::{TestApi, uxt};
-	use sp_transaction_pool::{TransactionPool, MaintainedTransactionPool, TransactionSource};
+	use sc_transaction_pool_api::{TransactionPool, MaintainedTransactionPool, TransactionSource};
 	use sp_runtime::generic::BlockId;
 	use sp_consensus::ImportedAux;
-	use sp_inherents::InherentDataProviders;
 	use sc_basic_authorship::ProposerFactory;
 	use sc_client_api::BlockBackend;
 
@@ -291,14 +293,21 @@ mod tests {
 		let builder = TestClientBuilder::new();
 		let (client, select_chain) = builder.build_with_longest_chain();
 		let client = Arc::new(client);
-		let inherent_data_providers = InherentDataProviders::new();
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = Arc::new(BasicPool::with_revalidation_type(
-			Options::default(), api(), None, RevalidationType::Full, spawner,
+			Options::default(),
+			true.into(),
+			api(),
+			None,
+			RevalidationType::Full,
+			spawner.clone(),
+			0,
 		));
 		let env = ProposerFactory::new(
+			spawner.clone(),
 			client.clone(),
 			pool.clone(),
+			None,
 			None,
 		);
 		// this test checks that blocks are created as soon as transactions are imported into the pool.
@@ -321,10 +330,10 @@ mod tests {
 				block_import: client.clone(),
 				env,
 				client: client.clone(),
-				pool: pool.pool().clone(),
+				pool: pool.clone(),
 				commands_stream,
 				select_chain,
-				inherent_data_providers,
+				create_inherent_data_providers: |_, _| async { Ok(()) },
 				consensus_data_provider: None,
 			}
 		);
@@ -348,7 +357,6 @@ mod tests {
 					clear_justification_requests: false,
 					needs_justification: false,
 					bad_justification: false,
-					needs_finality_proof: false,
 					is_new_best: true,
 				}
 			}
@@ -362,14 +370,21 @@ mod tests {
 		let builder = TestClientBuilder::new();
 		let (client, select_chain) = builder.build_with_longest_chain();
 		let client = Arc::new(client);
-		let inherent_data_providers = InherentDataProviders::new();
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = Arc::new(BasicPool::with_revalidation_type(
-			Options::default(), api(), None, RevalidationType::Full, spawner,
+			Options::default(),
+			true.into(),
+			api(),
+			None,
+			RevalidationType::Full,
+			spawner.clone(),
+			0,
 		));
 		let env = ProposerFactory::new(
+			spawner.clone(),
 			client.clone(),
 			pool.clone(),
+			None,
 			None,
 		);
 		// this test checks that blocks are created as soon as an engine command is sent over the stream.
@@ -379,11 +394,11 @@ mod tests {
 				block_import: client.clone(),
 				env,
 				client: client.clone(),
-				pool: pool.pool().clone(),
+				pool: pool.clone(),
 				commands_stream,
 				select_chain,
 				consensus_data_provider: None,
-				inherent_data_providers,
+				create_inherent_data_providers: |_, _| async { Ok(()) },
 			}
 		);
 		std::thread::spawn(|| {
@@ -414,7 +429,6 @@ mod tests {
 					clear_justification_requests: false,
 					needs_justification: false,
 					bad_justification: false,
-					needs_finality_proof: false,
 					is_new_best: true,
 				}
 			}
@@ -436,15 +450,22 @@ mod tests {
 		let builder = TestClientBuilder::new();
 		let (client, select_chain) = builder.build_with_longest_chain();
 		let client = Arc::new(client);
-		let inherent_data_providers = InherentDataProviders::new();
 		let pool_api = api();
 		let spawner = sp_core::testing::TaskExecutor::new();
 		let pool = Arc::new(BasicPool::with_revalidation_type(
-			Options::default(), pool_api.clone(), None, RevalidationType::Full, spawner,
+			Options::default(),
+			true.into(),
+			pool_api.clone(),
+			None,
+			RevalidationType::Full,
+			spawner.clone(),
+			0,
 		));
 		let env = ProposerFactory::new(
+			spawner.clone(),
 			client.clone(),
 			pool.clone(),
+			None,
 			None,
 		);
 		// this test checks that blocks are created as soon as an engine command is sent over the stream.
@@ -454,11 +475,11 @@ mod tests {
 				block_import: client.clone(),
 				env,
 				client: client.clone(),
-				pool: pool.pool().clone(),
+				pool: pool.clone(),
 				commands_stream,
 				select_chain,
 				consensus_data_provider: None,
-				inherent_data_providers,
+				create_inherent_data_providers: |_, _| async { Ok(()) },
 			}
 		);
 		std::thread::spawn(|| {
@@ -491,7 +512,6 @@ mod tests {
 					clear_justification_requests: false,
 					needs_justification: false,
 					bad_justification: false,
-					needs_finality_proof: false,
 					is_new_best: true
 				}
 			}
@@ -501,7 +521,7 @@ mod tests {
 		assert!(pool.submit_one(&BlockId::Number(1), SOURCE, uxt(Alice, 1)).await.is_ok());
 
 		let header = client.header(&BlockId::Number(1)).expect("db error").expect("imported above");
-		pool.maintain(sp_transaction_pool::ChainEvent::NewBestBlock {
+		pool.maintain(sc_transaction_pool_api::ChainEvent::NewBestBlock {
 			hash: header.hash(),
 			tree_route: None,
 		}).await;
@@ -521,7 +541,7 @@ mod tests {
 		pool_api.add_block(block, true);
 		pool_api.increment_nonce(Alice.into());
 
-		assert!(pool.submit_one(&BlockId::Number(1), SOURCE, uxt(Alice, 2)).await.is_ok());
+		assert!(pool.submit_one(&BlockId::Number(1), SOURCE, uxt(Bob, 0)).await.is_ok());
 		let (tx2, rx2) = futures::channel::oneshot::channel();
 		assert!(sink.send(EngineCommand::SealNewBlock {
 			parent_hash: Some(created_block.hash),
