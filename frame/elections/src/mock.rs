@@ -20,7 +20,7 @@
 #![cfg(test)]
 
 use frame_support::{
-	StorageValue, StorageMap, parameter_types, assert_ok,
+	parameter_types, assert_ok,
 	traits::{ChangeMembers, Currency, LockIdentifier},
 };
 use sp_core::H256;
@@ -36,7 +36,7 @@ parameter_types! {
 		frame_system::limits::BlockWeights::simple_max(1024);
 }
 impl frame_system::Config for Test {
-	type BaseCallFilter = ();
+	type BaseCallFilter = frame_support::traits::AllowAll;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type DbWeight = ();
@@ -58,6 +58,7 @@ impl frame_system::Config for Test {
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
+	type OnSetCode = ();
 }
 
 parameter_types! {
@@ -65,6 +66,8 @@ parameter_types! {
 }
 impl pallet_balances::Config for Test {
 	type MaxLocks = ();
+	type MaxReserves = ();
+	type ReserveIdentifier = [u8; 8];
 	type Balance = u64;
 	type DustRemoval = ();
 	type Event = Event;
@@ -102,7 +105,7 @@ impl ChangeMembers<u64> for TestChangeMembers {
 }
 
 parameter_types!{
-	pub const ElectionModuleId: LockIdentifier = *b"py/elect";
+	pub const ElectionPalletId: LockIdentifier = *b"py/elect";
 }
 
 impl elections::Config for Test {
@@ -122,7 +125,7 @@ impl elections::Config for Test {
 	type InactiveGracePeriod = InactiveGracePeriod;
 	type VotingPeriod = VotingPeriod;
 	type DecayRatio = DecayRatio;
-	type ModuleId = ElectionModuleId;
+	type PalletId = ElectionPalletId;
 }
 
 pub type Block = sp_runtime::generic::Block<Header, UncheckedExtrinsic>;
@@ -135,9 +138,9 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic
 	{
-		System: system::{Module, Call, Event<T>},
-		Balances: pallet_balances::{Module, Call, Event<T>, Config<T>},
-		Elections: elections::{Module, Call, Event<T>, Config<T>},
+		System: system::{Pallet, Call, Event<T>},
+		Balances: pallet_balances::{Pallet, Call, Event<T>, Config<T>},
+		Elections: elections::{Pallet, Call, Event<T>, Config<T>},
 	}
 );
 
@@ -194,7 +197,7 @@ impl ExtBuilder {
 		PRESENT_SLASH_PER_VOTER.with(|v| *v.borrow_mut() = self.bad_presentation_punishment);
 		DECAY_RATIO.with(|v| *v.borrow_mut() = self.decay_ratio);
 		let mut ext: sp_io::TestExternalities = GenesisConfig {
-			pallet_balances: pallet_balances::GenesisConfig::<Test>{
+			balances: pallet_balances::GenesisConfig::<Test>{
 				balances: vec![
 					(1, 10 * self.balance_factor),
 					(2, 20 * self.balance_factor),
@@ -263,7 +266,7 @@ pub(crate) fn new_test_ext_with_candidate_holes() -> sp_io::TestExternalities {
 	let mut t = ExtBuilder::default().build();
 	t.execute_with(|| {
 		<elections::Candidates<Test>>::put(vec![0, 0, 1]);
-		elections::CandidateCount::put(1);
+		elections::CandidateCount::<Test>::put(1);
 		<elections::RegisterInfoOf<Test>>::insert(1, (0, 2));
 	});
 	t

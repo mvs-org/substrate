@@ -88,7 +88,11 @@ pub type EquivocationProof<H> = sp_consensus_slots::EquivocationProof<H, Authori
 //       `Weight` types, since the metadata isn't able to disambiguate.
 pub type BabeAuthorityWeight = u64;
 
-/// The weight of a BABE block.
+/// The cumulative weight of a BABE block, i.e. sum of block weights starting
+/// at this block until the genesis block.
+///
+/// Primary blocks have a weight of 1 whereas secondary blocks have a weight
+/// of 0 (regardless of whether they are plain or vrf secondary blocks).
 pub type BabeBlockWeight = u32;
 
 /// Make a VRF transcript from given randomness, slot number and epoch.
@@ -242,8 +246,8 @@ impl AllowedSlots {
 
 #[cfg(feature = "std")]
 impl sp_consensus::SlotData for BabeGenesisConfiguration {
-	fn slot_duration(&self) -> u64 {
-		self.slot_duration
+	fn slot_duration(&self) -> std::time::Duration {
+		std::time::Duration::from_millis(self.slot_duration)
 	}
 
 	const SLOT_KEY: &'static [u8] = b"babe_configuration";

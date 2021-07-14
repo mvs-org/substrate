@@ -26,8 +26,8 @@ use frame_support::{
 		StorageEntryMetadata, StorageHasher,
 	},
 	StorageValue, StorageMap, StorageDoubleMap,
+	inherent::{ProvideInherent, InherentData, InherentIdentifier, MakeFatalError},
 };
-use sp_inherents::{ProvideInherent, InherentData, InherentIdentifier, MakeFatalError};
 use sp_core::{H256, sr25519};
 
 mod system;
@@ -112,7 +112,7 @@ mod module1 {
 		T::BlockNumber: From<u32>
 	{
 		type Call = Call<T, I>;
-		type Error = MakeFatalError<sp_inherents::Error>;
+		type Error = MakeFatalError<()>;
 		const INHERENT_IDENTIFIER: InherentIdentifier = INHERENT_IDENTIFIER;
 
 		fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
@@ -120,6 +120,10 @@ mod module1 {
 		}
 
 		fn check_inherent(_: &Self::Call, _: &InherentData) -> std::result::Result<(), Self::Error> {
+			unimplemented!();
+		}
+
+		fn is_inherent(_call: &Self::Call) -> bool {
 			unimplemented!();
 		}
 	}
@@ -172,7 +176,7 @@ mod module2 {
 
 	impl<T: Config<I>, I: Instance> ProvideInherent for Module<T, I> {
 		type Call = Call<T, I>;
-		type Error = MakeFatalError<sp_inherents::Error>;
+		type Error = MakeFatalError<()>;
 		const INHERENT_IDENTIFIER: InherentIdentifier = INHERENT_IDENTIFIER;
 
 		fn create_inherent(_data: &InherentData) -> Option<Self::Call> {
@@ -180,6 +184,10 @@ mod module2 {
 		}
 
 		fn check_inherent(_call: &Self::Call, _data: &InherentData) -> std::result::Result<(), Self::Error> {
+			unimplemented!();
+		}
+
+		fn is_inherent(_call: &Self::Call) -> bool {
 			unimplemented!();
 		}
 	}
@@ -247,7 +255,7 @@ pub type BlockNumber = u64;
 pub type Index = u64;
 
 impl system::Config for Runtime {
-	type BaseCallFilter= ();
+	type BaseCallFilter= frame_support::traits::AllowAll;
 	type Hash = H256;
 	type Origin = Origin;
 	type BlockNumber = BlockNumber;
@@ -264,24 +272,24 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic
 	{
-		System: system::{Module, Call, Event<T>},
+		System: system::{Pallet, Call, Event<T>},
 		Module1_1: module1::<Instance1>::{
-			Module, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
+			Pallet, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
 		},
 		Module1_2: module1::<Instance2>::{
-			Module, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
+			Pallet, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
 		},
-		Module2: module2::{Module, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent},
+		Module2: module2::{Pallet, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent},
 		Module2_1: module2::<Instance1>::{
-			Module, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
+			Pallet, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
 		},
 		Module2_2: module2::<Instance2>::{
-			Module, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
+			Pallet, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
 		},
 		Module2_3: module2::<Instance3>::{
-			Module, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
+			Pallet, Call, Storage, Event<T>, Config<T>, Origin<T>, Inherent
 		},
-		Module3: module3::{Module, Call},
+		Module3: module3::{Pallet, Call},
 	}
 );
 
@@ -291,26 +299,26 @@ pub type UncheckedExtrinsic = generic::UncheckedExtrinsic<u32, Call, Signature, 
 
 fn new_test_ext() -> sp_io::TestExternalities {
 	GenesisConfig{
-		module1_Instance1: module1::GenesisConfig {
+		module_1_1: module1::GenesisConfig {
 			value: 3,
 			test: 2,
 		},
-		module1_Instance2: module1::GenesisConfig {
+		module_1_2: module1::GenesisConfig {
 			value: 4,
 			test: 5,
 		},
-		module2: module2::GenesisConfig {
+		module_2: module2::GenesisConfig {
 			value: 4,
 			map: vec![(0, 0)],
 			double_map: vec![(0, 0, 0)],
 		},
-		module2_Instance1: module2::GenesisConfig {
+		module_2_1: module2::GenesisConfig {
 			value: 4,
 			map: vec![(0, 0)],
 			double_map: vec![(0, 0, 0)],
 		},
-		module2_Instance2: Default::default(),
-		module2_Instance3: Default::default(),
+		module_2_2: Default::default(),
+		module_2_3: Default::default(),
 	}.build_storage().unwrap().into()
 }
 

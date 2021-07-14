@@ -100,6 +100,7 @@
 //!     pub struct Module<T: Config>(std::marker::PhantomData<T>);
 //!
 //!     impl<T: Config> ElectionDataProvider<AccountId, BlockNumber> for Module<T> {
+//!         const MAXIMUM_VOTES_PER_VOTER: u32 = 1;
 //!         fn desired_targets() -> data_provider::Result<(u32, Weight)> {
 //!             Ok((1, 0))
 //!         }
@@ -168,7 +169,9 @@ use frame_support::weights::Weight;
 
 /// Re-export some type as they are used in the interface.
 pub use sp_arithmetic::PerThing;
-pub use sp_npos_elections::{Assignment, ExtendedBalance, PerThing128, Supports, VoteWeight};
+pub use sp_npos_elections::{
+	Assignment, ExtendedBalance, PerThing128, Supports, Support, VoteWeight
+};
 
 /// Types that are used by the data provider trait.
 pub mod data_provider {
@@ -178,6 +181,9 @@ pub mod data_provider {
 
 /// Something that can provide the data to an [`ElectionProvider`].
 pub trait ElectionDataProvider<AccountId, BlockNumber> {
+	/// Maximum number of votes per voter that this data provider is providing.
+	const MAXIMUM_VOTES_PER_VOTER: u32;
+
 	/// All possible targets for the election, i.e. the candidates.
 	///
 	/// If `maybe_max_len` is `Some(v)` then the resulting vector MUST NOT be longer than `v` items
@@ -218,12 +224,30 @@ pub trait ElectionDataProvider<AccountId, BlockNumber> {
 		_voters: Vec<(AccountId, VoteWeight, Vec<AccountId>)>,
 		_targets: Vec<AccountId>,
 		_target_stake: Option<VoteWeight>,
-	) {
-	}
+	) {}
+
+	/// Utility function only to be used in benchmarking scenarios, to be implemented optionally,
+	/// else a noop.
+	///
+	/// Same as `put_snapshot`, but can add a single voter one by one.
+	#[cfg(any(feature = "runtime-benchmarks", test))]
+	fn add_voter(_voter: AccountId, _weight: VoteWeight, _targets: Vec<AccountId>) {}
+
+	/// Utility function only to be used in benchmarking scenarios, to be implemented optionally,
+	/// else a noop.
+	///
+	/// Same as `put_snapshot`, but can add a single voter one by one.
+	#[cfg(any(feature = "runtime-benchmarks", test))]
+	fn add_target(_target: AccountId) {}
+
+	/// Clear all voters and targets.
+	#[cfg(any(feature = "runtime-benchmarks", test))]
+	fn clear() {}
 }
 
 #[cfg(feature = "std")]
 impl<AccountId, BlockNumber> ElectionDataProvider<AccountId, BlockNumber> for () {
+	const MAXIMUM_VOTES_PER_VOTER: u32 = 0;
 	fn targets(_maybe_max_len: Option<usize>) -> data_provider::Result<(Vec<AccountId>, Weight)> {
 		Ok(Default::default())
 	}

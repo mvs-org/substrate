@@ -42,6 +42,16 @@ pub use sp_storage::TrackedStorageKey;
 #[doc(hidden)]
 pub use log;
 
+/// Whitelist the given account.
+#[macro_export]
+macro_rules! whitelist {
+	($acc:ident) => {
+		frame_benchmarking::benchmarking::add_to_whitelist(
+			frame_system::Account::<T>::hashed_key_for(&$acc).into()
+		);
+	};
+}
+
 /// Construct pallet benchmarks for weighing dispatchables.
 ///
 /// Works around the idea of complexity parameters, named by a single letter (which is usually
@@ -676,7 +686,7 @@ macro_rules! impl_benchmark {
 		( $( $name_extra:ident ),* )
 	) => {
 		impl<T: Config $(<$instance>, $instance: $instance_bound )? >
-			$crate::Benchmarking<$crate::BenchmarkResults> for Module<T $(, $instance)? >
+			$crate::Benchmarking<$crate::BenchmarkResults> for Pallet<T $(, $instance)? >
 			where T: frame_system::Config, $( $where_clause )*
 		{
 			fn benchmarks(extra: bool) -> $crate::Vec<&'static [u8]> {
@@ -726,17 +736,20 @@ macro_rules! impl_benchmark {
 					SelectedBenchmark as $crate::BenchmarkingSetup<T $(, $instance)?>
 				>::components(&selected_benchmark);
 
+				let mut progress = $crate::benchmarking::current_time();
 				// Default number of steps for a component.
 				let mut prev_steps = 10;
 
-				let repeat_benchmark = |
+				let mut repeat_benchmark = |
 					repeat: u32,
 					c: &[($crate::BenchmarkParameter, u32)],
 					results: &mut $crate::Vec<$crate::BenchmarkResults>,
 					verify: bool,
+					step: u32,
+					num_steps: u32,
 				| -> Result<(), &'static str> {
 					// Run the benchmark `repeat` times.
-					for _ in 0..repeat {
+					for r in 0..repeat {
 						// Set up the externalities environment for the setup we want to
 						// benchmark.
 						let closure_to_benchmark = <
@@ -744,8 +757,8 @@ macro_rules! impl_benchmark {
 						>::instance(&selected_benchmark, c, verify)?;
 
 						// Set the block number to at least 1 so events are deposited.
-						if $crate::Zero::is_zero(&frame_system::Module::<T>::block_number()) {
-							frame_system::Module::<T>::set_block_number(1u32.into());
+						if $crate::Zero::is_zero(&frame_system::Pallet::<T>::block_number()) {
+							frame_system::Pallet::<T>::set_block_number(1u32.into());
 						}
 
 						// Commit the externalities to the database, flushing the DB cache.
@@ -764,12 +777,21 @@ macro_rules! impl_benchmark {
 								"Start Benchmark: {:?}", c
 							);
 
+							let start_pov = $crate::benchmarking::proof_size();
 							let start_extrinsic = $crate::benchmarking::current_time();
 
 							closure_to_benchmark()?;
 
 							let finish_extrinsic = $crate::benchmarking::current_time();
-							let elapsed_extrinsic = finish_extrinsic - start_extrinsic;
+							let end_pov = $crate::benchmarking::proof_size();
+
+							// Calculate the diff caused by the benchmark.
+							let elapsed_extrinsic = finish_extrinsic.saturating_sub(start_extrinsic);
+							let diff_pov = match (start_pov, end_pov) {
+								(Some(start), Some(end)) => end.saturating_sub(start),
+								_ => Default::default(),
+							};
+
 							// Commit the changes to get proper write count
 							$crate::benchmarking::commit_db();
 							$crate::log::trace!(
@@ -782,11 +804,29 @@ macro_rules! impl_benchmark {
 								"Read/Write Count {:?}", read_write_count
 							);
 
+							let time = $crate::benchmarking::current_time();
+							if time.saturating_sub(progress) > 5000000000 {
+								progress = $crate::benchmarking::current_time();
+								$crate::log::info!(
+									target: "benchmark",
+									"Benchmarking {} {}/{}, run {}/{}",
+									extrinsic,
+									step,
+									num_steps,
+									r,
+									repeat,
+								);
+							}
+
 							// Time the storage root recalculation.
 							let start_storage_root = $crate::benchmarking::current_time();
 							$crate::storage_root();
 							let finish_storage_root = $crate::benchmarking::current_time();
 							let elapsed_storage_root = finish_storage_root - start_storage_root;
+
+							// TODO: Fix memory allocation issue then re-enable
+							// let read_and_written_keys = $crate::benchmarking::get_read_and_written_keys();
+							let read_and_written_keys = Default::default();
 
 							results.push($crate::BenchmarkResults {
 								components: c.to_vec(),
@@ -796,6 +836,8 @@ macro_rules! impl_benchmark {
 								repeat_reads: read_write_count.1,
 								writes: read_write_count.2,
 								repeat_writes: read_write_count.3,
+								proof_size: diff_pov,
+								keys: read_and_written_keys,
 							});
 						}
 
@@ -809,9 +851,9 @@ macro_rules! impl_benchmark {
 				if components.is_empty() {
 					if verify {
 						// If `--verify` is used, run the benchmark once to verify it would complete.
-						repeat_benchmark(1, Default::default(), &mut $crate::Vec::new(), true)?;
+						repeat_benchmark(1, Default::default(), &mut $crate::Vec::new(), true, 1, 1)?;
 					}
-					repeat_benchmark(repeat, Default::default(), &mut results, false)?;
+					repeat_benchmark(repeat, Default::default(), &mut results, false, 1, 1)?;
 				} else {
 					// Select the component we will be benchmarking. Each component will be benchmarked.
 					for (idx, (name, low, high)) in components.iter().enumerate() {
@@ -849,9 +891,9 @@ macro_rules! impl_benchmark {
 
 							if verify {
 								// If `--verify` is used, run the benchmark once to verify it would complete.
-								repeat_benchmark(1, &c, &mut $crate::Vec::new(), true)?;
+								repeat_benchmark(1, &c, &mut $crate::Vec::new(), true, s, num_of_steps)?;
 							}
-							repeat_benchmark(repeat, &c, &mut results, false)?;
+							repeat_benchmark(repeat, &c, &mut results, false, s, num_of_steps)?;
 						}
 					}
 				}
@@ -915,8 +957,8 @@ macro_rules! impl_benchmark_test {
 					>::instance(&selected_benchmark, &c, true)?;
 
 					// Set the block number to at least 1 so events are deposited.
-					if $crate::Zero::is_zero(&frame_system::Module::<T>::block_number()) {
-						frame_system::Module::<T>::set_block_number(1u32.into());
+					if $crate::Zero::is_zero(&frame_system::Pallet::<T>::block_number()) {
+						frame_system::Pallet::<T>::set_block_number(1u32.into());
 					}
 
 					// Run execution + verification
@@ -961,7 +1003,7 @@ macro_rules! impl_benchmark_test {
 /// When called in `pallet_example` as
 ///
 /// ```rust,ignore
-/// impl_benchmark_test_suite!(Module, crate::tests::new_test_ext(), crate::tests::Test);
+/// impl_benchmark_test_suite!(Pallet, crate::tests::new_test_ext(), crate::tests::Test);
 /// ```
 ///
 /// It expands to the equivalent of:
@@ -1019,11 +1061,11 @@ macro_rules! impl_benchmark_test {
 /// }
 ///
 /// mod tests {
-/// 	// because of macro syntax limitations, neither Module nor benches can be paths, but both have
+/// 	// because of macro syntax limitations, neither Pallet nor benches can be paths, but both have
 /// 	// to be idents in the scope of `impl_benchmark_test_suite`.
-/// 	use crate::{benches, Module};
+/// 	use crate::{benches, Pallet};
 ///
-/// 	impl_benchmark_test_suite!(Module, new_test_ext(), Test, benchmarks_path = benches);
+/// 	impl_benchmark_test_suite!(Pallet, new_test_ext(), Test, benchmarks_path = benches);
 ///
 /// 	// new_test_ext and the Test item are defined later in this module
 /// }

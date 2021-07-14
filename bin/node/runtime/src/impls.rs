@@ -29,7 +29,7 @@ impl OnUnbalanced<NegativeImbalance> for Author {
 
 #[cfg(test)]
 mod multiplier_tests {
-	use sp_runtime::{assert_eq_error_rate, FixedPointNumber, traits::Convert};
+	use sp_runtime::{assert_eq_error_rate, FixedPointNumber, traits::{Convert, One, Zero}};
 	use pallet_transaction_payment::{Multiplier, TargetedFeeAdjustment};
 
 	use crate::{
@@ -74,7 +74,7 @@ mod multiplier_tests {
 		let m = max_normal() as f64;
 		// block weight always truncated to max weight
 		let block_weight = (block_weight as f64).min(m);
-		let v: f64 = AdjustmentVariable::get().to_fraction();
+		let v: f64 = AdjustmentVariable::get().to_float();
 
 		// Ideal saturation in terms of weight
 		let ss = target() as f64;
@@ -307,7 +307,7 @@ mod multiplier_tests {
 	fn weight_to_fee_should_not_overflow_on_large_weights() {
 		let kb = 1024 as Weight;
 		let mb = kb * kb;
-		let max_fm = Multiplier::saturating_from_integer(i128::max_value());
+		let max_fm = Multiplier::saturating_from_integer(i128::MAX);
 
 		// check that for all values it can compute, correctly.
 		vec![

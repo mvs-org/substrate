@@ -94,12 +94,23 @@ fn implement_common_api_traits(
 				Ok(pred(A::VERSION))
 			}
 
+			fn api_version<A: #crate_::RuntimeApiInfo + ?Sized>(
+				&self,
+				_: &#crate_::BlockId<#block_type>,
+			) -> std::result::Result<Option<u32>, #crate_::ApiError> where Self: Sized {
+				Ok(Some(A::VERSION))
+			}
+
 			fn record_proof(&mut self) {
 				unimplemented!("`record_proof` not implemented for runtime api mocks")
 			}
 
 			fn extract_proof(&mut self) -> Option<#crate_::StorageProof> {
 				unimplemented!("`extract_proof` not implemented for runtime api mocks")
+			}
+
+			fn proof_recorder(&self) -> Option<#crate_::ProofRecorder<#block_type>> {
+				unimplemented!("`proof_recorder` not implemented for runtime api mocks")
 			}
 
 			fn into_storage_changes(

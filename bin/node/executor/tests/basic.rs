@@ -347,14 +347,14 @@ fn full_native_block_import_works() {
 		let events = vec![
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(0),
-				event: Event::frame_system(frame_system::Event::ExtrinsicSuccess(
+				event: Event::System(frame_system::Event::ExtrinsicSuccess(
 					DispatchInfo { weight: timestamp_weight, class: DispatchClass::Mandatory, ..Default::default() }
 				)),
 				topics: vec![],
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(1),
-				event: Event::pallet_balances(pallet_balances::Event::Transfer(
+				event: Event::Balances(pallet_balances::Event::Transfer(
 					alice().into(),
 					bob().into(),
 					69 * DOLLARS,
@@ -363,12 +363,12 @@ fn full_native_block_import_works() {
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(1),
-				event: Event::pallet_treasury(pallet_treasury::RawEvent::Deposit(fees * 8 / 10)),
+				event: Event::Treasury(pallet_treasury::Event::Deposit(fees * 8 / 10)),
 				topics: vec![],
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(1),
-				event: Event::frame_system(frame_system::Event::ExtrinsicSuccess(
+				event: Event::System(frame_system::Event::ExtrinsicSuccess(
 					DispatchInfo { weight: transfer_weight, ..Default::default() }
 				)),
 				topics: vec![],
@@ -399,14 +399,14 @@ fn full_native_block_import_works() {
 		let events = vec![
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(0),
-				event: Event::frame_system(frame_system::Event::ExtrinsicSuccess(
+				event: Event::System(frame_system::Event::ExtrinsicSuccess(
 					DispatchInfo { weight: timestamp_weight, class: DispatchClass::Mandatory, ..Default::default() }
 				)),
 				topics: vec![],
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(1),
-				event: Event::pallet_balances(
+				event: Event::Balances(
 					pallet_balances::Event::Transfer(
 						bob().into(),
 						alice().into(),
@@ -417,19 +417,19 @@ fn full_native_block_import_works() {
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(1),
-				event: Event::pallet_treasury(pallet_treasury::RawEvent::Deposit(fees * 8 / 10)),
+				event: Event::Treasury(pallet_treasury::Event::Deposit(fees * 8 / 10)),
 				topics: vec![],
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(1),
-				event: Event::frame_system(frame_system::Event::ExtrinsicSuccess(
+				event: Event::System(frame_system::Event::ExtrinsicSuccess(
 					DispatchInfo { weight: transfer_weight, ..Default::default() }
 				)),
 				topics: vec![],
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(2),
-				event: Event::pallet_balances(
+				event: Event::Balances(
 					pallet_balances::Event::Transfer(
 						alice().into(),
 						bob().into(),
@@ -440,12 +440,12 @@ fn full_native_block_import_works() {
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(2),
-				event: Event::pallet_treasury(pallet_treasury::RawEvent::Deposit(fees * 8 / 10)),
+				event: Event::Treasury(pallet_treasury::Event::Deposit(fees * 8 / 10)),
 				topics: vec![],
 			},
 			EventRecord {
 				phase: Phase::ApplyExtrinsic(2),
-				event: Event::frame_system(frame_system::Event::ExtrinsicSuccess(
+				event: Event::System(frame_system::Event::ExtrinsicSuccess(
 					DispatchInfo { weight: transfer_weight, ..Default::default() }
 				)),
 				topics: vec![],
@@ -600,13 +600,13 @@ fn deploying_wasm_contract_should_work() {
 	let transfer_code = wat::parse_str(CODE_TRANSFER).unwrap();
 	let transfer_ch = <Runtime as frame_system::Config>::Hashing::hash(&transfer_code);
 
-	let addr = pallet_contracts::Module::<Runtime>::contract_address(
+	let addr = pallet_contracts::Pallet::<Runtime>::contract_address(
 		&charlie(),
 		&transfer_ch,
 		&[],
 	);
 
-	let subsistence = pallet_contracts::Module::<Runtime>::subsistence_threshold();
+	let subsistence = pallet_contracts::Pallet::<Runtime>::subsistence_threshold();
 
 	let time = 42 * 1000;
 	let b = construct_block(
@@ -656,13 +656,10 @@ fn deploying_wasm_contract_should_work() {
 	).0.unwrap();
 
 	t.execute_with(|| {
-		// Verify that the contract constructor worked well and code of TRANSFER contract is actually deployed.
-		assert_eq!(
-			&pallet_contracts::ContractInfoOf::<Runtime>::get(addr)
-				.and_then(|c| c.get_alive())
-				.unwrap()
-				.code_hash,
-			&transfer_ch
+		// Verify that the contract does exist by querying some of its storage items
+		// It does not matter that the storage item itself does not exist.
+		assert!(
+			&pallet_contracts::Pallet::<Runtime>::get_storage(addr, Default::default()).is_ok()
 		);
 	});
 }
@@ -699,6 +696,9 @@ fn native_big_block_import_succeeds() {
 #[test]
 fn native_big_block_import_fails_on_fallback() {
 	let mut t = new_test_ext(compact_code_unwrap(), false);
+
+	// We set the heap pages to 8 because we know that should give an OOM in WASM with the given block.
+	set_heap_pages(&mut t.ext(), 8);
 
 	assert!(
 		executor_call::<NeverNativeValue, fn() -> _>(
@@ -844,5 +844,5 @@ fn should_import_block_with_test_client() {
 	let block_data = block1.0;
 	let block = node_primitives::Block::decode(&mut &block_data[..]).unwrap();
 
-	client.import(BlockOrigin::Own, block).unwrap();
+	futures::executor::block_on(client.import(BlockOrigin::Own, block)).unwrap();
 }
