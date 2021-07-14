@@ -55,21 +55,21 @@ pub trait DefaultConfigurationValues {
 	///
 	/// By default this is `30333`.
 	fn p2p_listen_port() -> u16 {
-		5252
+		30333
 	}
 
 	/// The port Substrate should listen on for websocket connections.
 	///
 	/// By default this is `9944`.
 	fn rpc_ws_listen_port() -> u16 {
-		8830
+		9944
 	}
 
 	/// The port Substrate should listen on for http connections.
 	///
 	/// By default this is `9933`.
 	fn rpc_http_listen_port() -> u16 {
-		8831
+		9933
 	}
 
 	/// The port Substrate should listen on for prometheus connections.
@@ -159,6 +159,7 @@ pub trait CliConfiguration<DCV: DefaultConfigurationValues = ()>: Sized {
 		&self,
 		chain_spec: &Box<dyn ChainSpec>,
 		is_dev: bool,
+		is_validator: bool,
 		net_config_dir: PathBuf,
 		client_id: &str,
 		node_name: &str,
@@ -169,6 +170,7 @@ pub trait CliConfiguration<DCV: DefaultConfigurationValues = ()>: Sized {
 			network_params.network_config(
 				chain_spec,
 				is_dev,
+				is_validator,
 				Some(net_config_dir),
 				client_id,
 				node_name,
@@ -356,11 +358,23 @@ pub trait CliConfiguration<DCV: DefaultConfigurationValues = ()>: Sized {
 		Ok(None)
 	}
 
+	/// Get the RPC HTTP thread pool size (`None` for a default 4-thread pool config).
+	///
+	/// By default this is `None`.
+	fn rpc_http_threads(&self) -> Result<Option<usize>> {
+		Ok(None)
+	}
+
 	/// Get the RPC cors (`None` if disabled)
 	///
 	/// By default this is `Some(Vec::new())`.
 	fn rpc_cors(&self, _is_dev: bool) -> Result<Option<Vec<String>>> {
 		Ok(Some(Vec::new()))
+	}
+
+	/// Get maximum RPC payload.
+	fn rpc_max_payload(&self) -> Result<Option<usize>> {
+		Ok(None)
 	}
 
 	/// Get the prometheus configuration (`None` if disabled)
@@ -501,6 +515,7 @@ pub trait CliConfiguration<DCV: DefaultConfigurationValues = ()>: Sized {
 			network: self.network_config(
 				&chain_spec,
 				is_dev,
+				is_validator,
 				net_config_dir,
 				client_id.as_str(),
 				self.node_name()?.as_str(),
@@ -523,7 +538,9 @@ pub trait CliConfiguration<DCV: DefaultConfigurationValues = ()>: Sized {
 			rpc_ipc: self.rpc_ipc()?,
 			rpc_methods: self.rpc_methods()?,
 			rpc_ws_max_connections: self.rpc_ws_max_connections()?,
+			rpc_http_threads: self.rpc_http_threads()?,
 			rpc_cors: self.rpc_cors(is_dev)?,
+			rpc_max_payload: self.rpc_max_payload()?,
 			prometheus_config: self.prometheus_config(DCV::prometheus_listen_port())?,
 			telemetry_endpoints,
 			telemetry_external_transport: self.telemetry_external_transport()?,

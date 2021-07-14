@@ -39,13 +39,13 @@ use futures::prelude::*;
 use log::{debug, error, trace};
 use serde_json::json;
 use std::{collections::HashMap, pin::Pin, task::{Context, Poll}, time::Duration};
-use wasm_timer::Instant;
+use wasm_timer::{Delay, Instant};
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedSender, TracingUnboundedReceiver};
 
 pub use libp2p::PeerId;
 
 /// We don't accept nodes whose reputation is under this value.
-const BANNED_THRESHOLD: i32 = 82 * (i32::min_value() / 100);
+const BANNED_THRESHOLD: i32 = 82 * (i32::MIN / 100);
 /// Reputation change for a node when we get disconnected from it.
 const DISCONNECT_REPUTATION_CHANGE: i32 = -256;
 /// Amount of time between the moment we disconnect from a node and the moment we remove it from
@@ -107,7 +107,7 @@ impl ReputationChange {
 
 	/// New reputation change that forces minimum possible reputation.
 	pub const fn new_fatal(reason: &'static str) -> ReputationChange {
-		ReputationChange { value: i32::min_value(), reason }
+		ReputationChange { value: i32::MIN, reason }
 	}
 }
 
@@ -252,6 +252,9 @@ pub struct Peerset {
 	created: Instant,
 	/// Last time when we updated the reputations of connected nodes.
 	latest_time_update: Instant,
+	/// Next time to do a periodic call to `alloc_slots` with all sets. This is done once per
+	/// second, to match the period of the reputation updates.
+	next_periodic_alloc_slots: Delay,
 }
 
 impl Peerset {
@@ -279,6 +282,7 @@ impl Peerset {
 				message_queue: VecDeque::new(),
 				created: now,
 				latest_time_update: now,
+				next_periodic_alloc_slots: Delay::new(Duration::new(0, 0)),
 			}
 		};
 
@@ -296,7 +300,10 @@ impl Peerset {
 			}
 		}
 
-		peerset.alloc_slots();
+		for set_index in 0..peerset.data.num_sets() {
+			peerset.alloc_slots(SetId(set_index));
+		}
+
 		(peerset, handle)
 	}
 
@@ -307,7 +314,7 @@ impl Peerset {
 		}
 
 		self.data.add_no_slot_node(set_id.0, peer_id);
-		self.alloc_slots();
+		self.alloc_slots(set_id);
 	}
 
 	fn on_remove_reserved_peer(&mut self, set_id: SetId, peer_id: PeerId) {
@@ -372,8 +379,13 @@ impl Peerset {
 			}
 
 		} else {
-			self.alloc_slots();
+			self.alloc_slots(set_id);
 		}
+	}
+
+	/// Returns the list of reserved peers.
+	pub fn reserved_peers(&self, set_id: SetId) -> impl Iterator<Item = &PeerId> {
+		self.reserved_nodes[set_id.0].0.iter()
 	}
 
 	/// Adds a node to the given set. The peerset will, if possible and not already the case,
@@ -383,7 +395,7 @@ impl Peerset {
 	pub fn add_to_peers_set(&mut self, set_id: SetId, peer_id: PeerId) {
 		if let peersstate::Peer::Unknown(entry) = self.data.peer(set_id.0, &peer_id) {
 			entry.discover();
-			self.alloc_slots();
+			self.alloc_slots(set_id);
 		}
 	}
 
@@ -432,6 +444,8 @@ impl Peerset {
 					set_id: SetId(set_index),
 					peer_id: peer.into_peer_id(),
 				});
+
+				self.alloc_slots(SetId(set_index));
 			}
 		}
 	}
@@ -500,58 +514,75 @@ impl Peerset {
 		}
 	}
 
-	/// Try to fill available out slots with nodes.
-	fn alloc_slots(&mut self) {
+	/// Try to fill available out slots with nodes for the given set.
+	fn alloc_slots(&mut self, set_id: SetId) {
 		self.update_time();
 
 		// Try to connect to all the reserved nodes that we are not connected to.
-		for set_index in 0..self.data.num_sets() {
-			for reserved_node in &self.reserved_nodes[set_index].0 {
-				let entry = match self.data.peer(set_index, reserved_node) {
-					peersstate::Peer::Unknown(n) => n.discover(),
-					peersstate::Peer::NotConnected(n) => n,
-					peersstate::Peer::Connected(_) => continue,
-				};
+		for reserved_node in &self.reserved_nodes[set_id.0].0 {
+			let entry = match self.data.peer(set_id.0, reserved_node) {
+				peersstate::Peer::Unknown(n) => n.discover(),
+				peersstate::Peer::NotConnected(n) => n,
+				peersstate::Peer::Connected(_) => continue,
+			};
 
-				match entry.try_outgoing() {
-					Ok(conn) => self.message_queue.push_back(Message::Connect {
-						set_id: SetId(set_index),
-						peer_id: conn.into_peer_id()
-					}),
-					Err(_) => {
-						// An error is returned only if no slot is available. Reserved nodes are
-						// marked in the state machine with a flag saying "doesn't occupy a slot",
-						// and as such this should never happen.
-						debug_assert!(false);
-						log::error!(
-							target: "peerset",
-							"Not enough slots to connect to reserved node"
-						);
-					}
+			// Don't connect to nodes with an abysmal reputation, even if they're reserved.
+			// This is a rather opinionated behaviour, and it wouldn't be fundamentally wrong to
+			// remove that check. If necessary, the peerset should be refactored to give more
+			// control over what happens in that situation.
+			if entry.reputation() < BANNED_THRESHOLD {
+				break;
+			}
+
+			match entry.try_outgoing() {
+				Ok(conn) => self.message_queue.push_back(Message::Connect {
+					set_id,
+					peer_id: conn.into_peer_id()
+				}),
+				Err(_) => {
+					// An error is returned only if no slot is available. Reserved nodes are
+					// marked in the state machine with a flag saying "doesn't occupy a slot",
+					// and as such this should never happen.
+					debug_assert!(false);
+					log::error!(
+						target: "peerset",
+						"Not enough slots to connect to reserved node"
+					);
 				}
 			}
 		}
 
 		// Now, we try to connect to other nodes.
-		for set_index in 0..self.data.num_sets() {
-			// Nothing more to do if we're in reserved mode.
-			if self.reserved_nodes[set_index].1 {
-				continue;
+
+		// Nothing more to do if we're in reserved mode.
+		if self.reserved_nodes[set_id.0].1 {
+			return;
+		}
+
+		// Try to grab the next node to attempt to connect to.
+		// Since `highest_not_connected_peer` is rather expensive to call, check beforehand
+		// whether we have an available slot.
+		while self.data.has_free_outgoing_slot(set_id.0) {
+			let next = match self.data.highest_not_connected_peer(set_id.0) {
+				Some(n) => n,
+				None => break
+			};
+
+			// Don't connect to nodes with an abysmal reputation.
+			if next.reputation() < BANNED_THRESHOLD {
+				break;
 			}
 
-			// Try to grab the next node to attempt to connect to.
-			while let Some(next) = self.data.highest_not_connected_peer(set_index) {
-				// Don't connect to nodes with an abysmal reputation.
-				if next.reputation() < BANNED_THRESHOLD {
+			match next.try_outgoing() {
+				Ok(conn) => self.message_queue.push_back(Message::Connect {
+					set_id,
+					peer_id: conn.into_peer_id()
+				}),
+				Err(_) => {
+					// This branch can only be entered if there is no free slot, which is
+					// checked above.
+					debug_assert!(false);
 					break;
-				}
-
-				match next.try_outgoing() {
-					Ok(conn) => self.message_queue.push_back(Message::Connect {
-						set_id: SetId(set_index),
-						peer_id: conn.into_peer_id()
-					}),
-					Err(_) => break,	// No more slots available.
 				}
 			}
 		}
@@ -624,7 +655,7 @@ impl Peerset {
 			self.on_remove_from_peers_set(set_id, peer_id);
 		}
 
-		self.alloc_slots();
+		self.alloc_slots(set_id);
 	}
 
 	/// Reports an adjustment to the reputation of the given peer.
@@ -680,6 +711,14 @@ impl Stream for Peerset {
 		loop {
 			if let Some(message) = self.message_queue.pop_front() {
 				return Poll::Ready(Some(message));
+			}
+
+			if let Poll::Ready(_) = Future::poll(Pin::new(&mut self.next_periodic_alloc_slots), cx) {
+				self.next_periodic_alloc_slots = Delay::new(Duration::new(1, 0));
+
+				for set_index in 0..self.data.num_sets() {
+					self.alloc_slots(SetId(set_index));
+				}
 			}
 
 			let action = match Stream::poll_next(Pin::new(&mut self.rx), cx) {
@@ -883,6 +922,47 @@ mod tests {
 			peerset.incoming(SetId::from(0), peer_id.clone(), IncomingIndex(2));
 			while let Poll::Ready(msg) = Stream::poll_next(Pin::new(&mut peerset), cx) {
 				assert_eq!(msg.unwrap(), Message::Accept(IncomingIndex(2)));
+			}
+
+			Poll::Ready(())
+		});
+
+		futures::executor::block_on(fut);
+	}
+
+	#[test]
+	fn test_relloc_after_banned() {
+		let (mut peerset, handle) = Peerset::from_config(PeersetConfig {
+			sets: vec![SetConfig {
+				in_peers: 25,
+				out_peers: 25,
+				bootnodes: vec![],
+				reserved_nodes: Default::default(),
+				reserved_only: false,
+			}],
+		});
+
+		// We ban a node by setting its reputation under the threshold.
+		let peer_id = PeerId::random();
+		handle.report_peer(peer_id.clone(), ReputationChange::new(BANNED_THRESHOLD - 1, ""));
+
+		let fut = futures::future::poll_fn(move |cx| {
+			// We need one polling for the message to be processed.
+			assert_eq!(Stream::poll_next(Pin::new(&mut peerset), cx), Poll::Pending);
+
+			// Check that an incoming connection from that node gets refused.
+			// This is already tested in other tests, but it is done again here because it doesn't
+			// hurt.
+			peerset.incoming(SetId::from(0), peer_id.clone(), IncomingIndex(1));
+			if let Poll::Ready(msg) = Stream::poll_next(Pin::new(&mut peerset), cx) {
+				assert_eq!(msg.unwrap(), Message::Reject(IncomingIndex(1)));
+			} else {
+				panic!()
+			}
+
+			// Wait for the peerset to change its mind and actually connect to it.
+			while let Poll::Ready(msg) = Stream::poll_next(Pin::new(&mut peerset), cx) {
+				assert_eq!(msg.unwrap(), Message::Connect { set_id: SetId::from(0), peer_id });
 			}
 
 			Poll::Ready(())

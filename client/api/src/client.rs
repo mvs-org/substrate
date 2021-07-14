@@ -23,7 +23,7 @@ use sp_core::storage::StorageKey;
 use sp_runtime::{
 	traits::{Block as BlockT, NumberFor},
 	generic::{BlockId, SignedBlock},
-	Justification,
+	Justifications,
 };
 use sp_consensus::BlockOrigin;
 
@@ -31,6 +31,7 @@ use crate::blockchain::Info;
 use crate::notifications::StorageEventStream;
 use sp_utils::mpsc::TracingUnboundedReceiver;
 use sp_blockchain;
+use sc_transaction_pool_api::ChainEvent;
 
 /// Type that implements `futures::Stream` of block import events.
 pub type ImportNotifications<Block> = TracingUnboundedReceiver<BlockImportNotification<Block>>;
@@ -84,27 +85,40 @@ pub trait BlockBackend<Block: BlockT> {
 		id: &BlockId<Block>
 	) -> sp_blockchain::Result<Option<Vec<<Block as BlockT>::Extrinsic>>>;
 
+	/// Get all indexed transactions for a block,
+	/// including renewed transactions.
+	///
+	/// Note that this will only fetch transactions
+	/// that are indexed by the runtime with `storage_index_transaction`.
+	fn block_indexed_body(
+		&self,
+		id: &BlockId<Block>,
+	) -> sp_blockchain::Result<Option<Vec<Vec<u8>>>>;
+
 	/// Get full block by id.
 	fn block(&self, id: &BlockId<Block>) -> sp_blockchain::Result<Option<SignedBlock<Block>>>;
 
 	/// Get block status.
 	fn block_status(&self, id: &BlockId<Block>) -> sp_blockchain::Result<sp_consensus::BlockStatus>;
 
-	/// Get block justification set by id.
-	fn justification(&self, id: &BlockId<Block>) -> sp_blockchain::Result<Option<Justification>>;
+	/// Get block justifications for the block with the given id.
+	fn justifications(&self, id: &BlockId<Block>) -> sp_blockchain::Result<Option<Justifications>>;
 
 	/// Get block hash by number.
 	fn block_hash(&self, number: NumberFor<Block>) -> sp_blockchain::Result<Option<Block::Hash>>;
 
-	/// Get single extrinsic by hash.
-	fn extrinsic(
+	/// Get single indexed transaction by content hash. 
+	///
+	/// Note that this will only fetch transactions
+	/// that are indexed by the runtime with `storage_index_transaction`.
+	fn indexed_transaction(
 		&self,
 		hash: &Block::Hash,
-	) -> sp_blockchain::Result<Option<<Block as BlockT>::Extrinsic>>;
+	) -> sp_blockchain::Result<Option<Vec<u8>>>;
 
-	/// Check if extrinsic exists.
-	fn have_extrinsic(&self, hash: &Block::Hash) -> sp_blockchain::Result<bool> {
-		Ok(self.extrinsic(hash)?.is_some())
+	/// Check if transaction index exists.
+	fn has_indexed_transaction(&self, hash: &Block::Hash) -> sp_blockchain::Result<bool> {
+		Ok(self.indexed_transaction(hash)?.is_some())
 	}
 }
 
@@ -265,7 +279,7 @@ pub struct FinalityNotification<Block: BlockT> {
 	pub header: Block::Header,
 }
 
-impl<B: BlockT> TryFrom<BlockImportNotification<B>> for sp_transaction_pool::ChainEvent<B> {
+impl<B: BlockT> TryFrom<BlockImportNotification<B>> for ChainEvent<B> {
 	type Error = ();
 
 	fn try_from(n: BlockImportNotification<B>) -> Result<Self, ()> {
@@ -280,7 +294,7 @@ impl<B: BlockT> TryFrom<BlockImportNotification<B>> for sp_transaction_pool::Cha
 	}
 }
 
-impl<B: BlockT> From<FinalityNotification<B>> for sp_transaction_pool::ChainEvent<B> {
+impl<B: BlockT> From<FinalityNotification<B>> for ChainEvent<B> {
 	fn from(n: FinalityNotification<B>) -> Self {
 		Self::Finalized {
 			hash: n.hash,

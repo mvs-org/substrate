@@ -50,8 +50,8 @@ frame_support::construct_runtime!(
 		NodeBlock = Block,
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
-		System: frame_system::{Module, Call, Config, Storage, Event<T>},
-		Module: module::{Module, Call, Event},
+		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
+		Module: module::{Pallet, Call, Event},
 	}
 );
 
@@ -67,7 +67,7 @@ frame_support::parameter_types! {
 		);
 }
 impl system::Config for Runtime {
-	type BaseCallFilter = ();
+	type BaseCallFilter = frame_support::traits::AllowAll;
 	type BlockWeights = ();
 	type BlockLength = BlockLength;
 	type DbWeight = ();
@@ -89,6 +89,7 @@ impl system::Config for Runtime {
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
+	type OnSetCode = ();
 }
 
 impl module::Config for Runtime {

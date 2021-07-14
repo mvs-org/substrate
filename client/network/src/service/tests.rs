@@ -18,6 +18,7 @@
 
 use crate::{config, Event, NetworkService, NetworkWorker};
 use crate::block_request_handler::BlockRequestHandler;
+use crate::state_request_handler::StateRequestHandler;
 use crate::light_client_requests::handler::LightClientRequestHandler;
 
 use libp2p::PeerId;
@@ -47,12 +48,14 @@ fn build_test_full_node(config: config::NetworkConfiguration)
 
 	#[derive(Clone)]
 	struct PassThroughVerifier(bool);
+
+	#[async_trait::async_trait]
 	impl<B: BlockT> sp_consensus::import_queue::Verifier<B> for PassThroughVerifier {
-		fn verify(
+		async fn verify(
 			&mut self,
 			origin: sp_consensus::BlockOrigin,
 			header: B::Header,
-			justification: Option<sp_runtime::Justification>,
+			justifications: Option<sp_runtime::Justifications>,
 			body: Option<Vec<B::Extrinsic>>,
 		) -> Result<
 			(
@@ -79,7 +82,7 @@ fn build_test_full_node(config: config::NetworkConfiguration)
 			let mut import = sp_consensus::BlockImportParams::new(origin, header);
 			import.body = body;
 			import.finalized = self.0;
-			import.justification = justification;
+			import.justifications = justifications;
 			import.fork_choice = Some(sp_consensus::ForkChoiceStrategy::LongestChain);
 			Ok((import, maybe_keys))
 		}
@@ -97,6 +100,16 @@ fn build_test_full_node(config: config::NetworkConfiguration)
 
 	let block_request_protocol_config = {
 		let (handler, protocol_config) = BlockRequestHandler::new(
+			&protocol_id,
+			client.clone(),
+			50,
+		);
+		async_std::task::spawn(handler.run().boxed());
+		protocol_config
+	};
+
+	let state_request_protocol_config = {
+		let (handler, protocol_config) = StateRequestHandler::new(
 			&protocol_id,
 			client.clone(),
 			50,
@@ -129,6 +142,7 @@ fn build_test_full_node(config: config::NetworkConfiguration)
 		),
 		metrics_registry: None,
 		block_request_protocol_config,
+		state_request_protocol_config,
 		light_client_request_protocol_config,
 	})
 	.unwrap();
@@ -157,6 +171,7 @@ fn build_nodes_one_proto()
 		extra_sets: vec![
 			config::NonDefaultSetConfig {
 				notifications_protocol: PROTOCOL_NAME,
+				fallback_names: Vec::new(),
 				max_notification_size: 1024 * 1024,
 				set_config: Default::default()
 			}
@@ -170,6 +185,7 @@ fn build_nodes_one_proto()
 		extra_sets: vec![
 			config::NonDefaultSetConfig {
 				notifications_protocol: PROTOCOL_NAME,
+				fallback_names: Vec::new(),
 				max_notification_size: 1024 * 1024,
 				set_config: config::SetConfig {
 					reserved_nodes: vec![config::MultiaddrWithPeerId {
@@ -326,9 +342,10 @@ fn lots_of_incoming_peers_works() {
 		extra_sets: vec![
 			config::NonDefaultSetConfig {
 				notifications_protocol: PROTOCOL_NAME,
+				fallback_names: Vec::new(),
 				max_notification_size: 1024 * 1024,
 				set_config: config::SetConfig {
-					in_peers: u32::max_value(),
+					in_peers: u32::MAX,
 					.. Default::default()
 				},
 			}
@@ -351,6 +368,7 @@ fn lots_of_incoming_peers_works() {
 			extra_sets: vec![
 				config::NonDefaultSetConfig {
 					notifications_protocol: PROTOCOL_NAME,
+					fallback_names: Vec::new(),
 					max_notification_size: 1024 * 1024,
 					set_config: config::SetConfig {
 						reserved_nodes: vec![config::MultiaddrWithPeerId {
@@ -448,6 +466,81 @@ fn notifications_back_pressure() {
 		for num in 0..TOTAL_NOTIFS {
 			let notif = node1.notification_sender(node2_id.clone(), PROTOCOL_NAME).unwrap();
 			notif.ready().await.unwrap().send(format!("hello #{}", num)).unwrap();
+		}
+
+		receiver.await;
+	});
+}
+
+#[test]
+fn fallback_name_working() {
+	// Node 1 supports the protocols "new" and "old". Node 2 only supports "old". Checks whether
+	// they can connect.
+
+	const NEW_PROTOCOL_NAME: Cow<'static, str> =
+		Cow::Borrowed("/new-shiny-protocol-that-isnt-PROTOCOL_NAME");
+
+	let listen_addr = config::build_multiaddr![Memory(rand::random::<u64>())];
+
+	let (node1, mut events_stream1) = build_test_full_node(config::NetworkConfiguration {
+		extra_sets: vec![
+			config::NonDefaultSetConfig {
+				notifications_protocol: NEW_PROTOCOL_NAME.clone(),
+				fallback_names: vec![PROTOCOL_NAME],
+				max_notification_size: 1024 * 1024,
+				set_config: Default::default()
+			}
+		],
+		listen_addresses: vec![listen_addr.clone()],
+		transport: config::TransportConfig::MemoryOnly,
+		.. config::NetworkConfiguration::new_local()
+	});
+
+	let (_, mut events_stream2) = build_test_full_node(config::NetworkConfiguration {
+		extra_sets: vec![
+			config::NonDefaultSetConfig {
+				notifications_protocol: PROTOCOL_NAME,
+				fallback_names: Vec::new(),
+				max_notification_size: 1024 * 1024,
+				set_config: config::SetConfig {
+					reserved_nodes: vec![config::MultiaddrWithPeerId {
+						multiaddr: listen_addr,
+						peer_id: node1.local_peer_id().clone(),
+					}],
+					.. Default::default()
+				}
+			}
+		],
+		listen_addresses: vec![],
+		transport: config::TransportConfig::MemoryOnly,
+		.. config::NetworkConfiguration::new_local()
+	});
+
+	let receiver = async_std::task::spawn(async move {
+		// Wait for the `NotificationStreamOpened`.
+		loop {
+			match events_stream2.next().await.unwrap() {
+				Event::NotificationStreamOpened { protocol, negotiated_fallback, .. } => {
+					assert_eq!(protocol, PROTOCOL_NAME);
+					assert_eq!(negotiated_fallback, None);
+					break
+				},
+				_ => {}
+			};
+		}
+	});
+
+	async_std::task::block_on(async move {
+		// Wait for the `NotificationStreamOpened`.
+		loop {
+			match events_stream1.next().await.unwrap() {
+				Event::NotificationStreamOpened { protocol, negotiated_fallback, .. } => {
+					assert_eq!(protocol, NEW_PROTOCOL_NAME);
+					assert_eq!(negotiated_fallback, Some(PROTOCOL_NAME));
+					break
+				},
+				_ => {}
+			};
 		}
 
 		receiver.await;
