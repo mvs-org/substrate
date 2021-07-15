@@ -179,7 +179,10 @@ impl<Hash, Extrinsic> fmt::Debug for Transaction<Hash, Extrinsic> where
 		let join_tags = |tags: &[Tag]| {
 			tags.iter().map(|tag| HexDisplay::from(tag).to_string()).collect::<Vec<_>>().join(", ")
 		};
-
+		write!(fmt, "**************************************************************************");
+		write!(fmt, "**************************************************************************");
+		write!(fmt, "**************************************************************************");
+		write!(fmt, "**************************************************************************");
 		write!(fmt, "Transaction {{ ")?;
 		write!(fmt, "hash: {:?}, ", &self.hash)?;
 		write!(fmt, "priority: {:?}, ", &self.priority)?;
