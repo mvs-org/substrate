@@ -278,11 +278,6 @@ impl<Hash: hash::Hash + Member + Serialize, Ex: std::fmt::Debug> BasePool<Hash, 
 			self.ready.provided_tags(),
 			&self.recently_pruned,
 		);
-		trace!(target: "txpool", "********************************************************");
-		trace!(target: "txpool", "********************************************************");
-		trace!(target: "txpool", "********************************************************");
-		trace!(target: "txpool", "********************************************************");
-		trace!(target: "txpool", "********************************************************");
 		trace!(target: "txpool", "[{:?}] {:?}", tx.transaction.hash, tx);
 		debug!(
 			target: "txpool",

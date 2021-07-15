@@ -15,7 +15,7 @@
 
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-
+use log::{trace, debug, warn};
 use std::{
 	collections::{HashMap, HashSet},
 	fmt,
@@ -77,6 +77,10 @@ impl<Hash, Ex> WaitingTransaction<Hash, Ex> {
 		provided: &HashMap<Tag, Hash>,
 		recently_pruned: &[HashSet<Tag>],
 	) -> Self {
+		trace!(target: "txpool", "********************************************************");
+		trace!(target: "txpool", "********************************************************");
+		trace!(target: "txpool", "********************************************************");
+		trace!(target: "txpool", "********************************************************");
 		let missing_tags = transaction.requires
 			.iter()
 			.filter(|tag| {
